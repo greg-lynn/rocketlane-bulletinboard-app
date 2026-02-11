@@ -426,3 +426,60 @@ select:focus,
     flex-wrap: wrap;
   }
 }
+
+/* Compact styling for the Home right-sidebar widget placement. */
+body.layout-sidebar {
+  background: transparent;
+}
+
+body.layout-sidebar .app-shell {
+  max-width: 100%;
+  padding: 0.6rem;
+}
+
+body.layout-sidebar .eyebrow {
+  display: none;
+}
+
+body.layout-sidebar .app-header {
+  align-items: center;
+}
+
+body.layout-sidebar h1 {
+  font-size: 1.25rem;
+}
+
+body.layout-sidebar .control-row {
+  grid-template-columns: 1fr;
+}
+
+body.layout-sidebar #seedDemoButton,
+body.layout-sidebar #clearBoardButton {
+  display: none;
+}
+
+body.layout-sidebar .notes-column,
+body.layout-sidebar .editor-column {
+  box-shadow: none;
+}
+
+body.layout-sidebar .content-grid {
+  grid-template-columns: 1fr;
+}
+
+body.layout-sidebar .notes-column {
+  min-height: auto;
+}
+
+body.layout-sidebar .notes-grid {
+  grid-template-columns: 1fr;
+}
+
+body.layout-sidebar .note-card {
+  min-height: 140px;
+  transform: none;
+}
+
+body.layout-sidebar .note-meta {
+  display: none;
+}

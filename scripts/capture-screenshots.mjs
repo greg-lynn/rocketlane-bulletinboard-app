@@ -12,6 +12,10 @@ const appUrl =
   "file://" +
   appFile +
   "?demo=1&account=Acme%20Implementation%20Team&project=Customer%20Home";
+const sidebarUrl =
+  "file://" +
+  appFile +
+  "?demo=1&layout=sidebar&account=Acme%20Implementation%20Team&project=Home";
 
 const browser = await chromium.launch({
   headless: true,
@@ -39,6 +43,14 @@ await page.waitForTimeout(250);
 
 await page.screenshot({
   path: path.join(screenshotDir, "bulletin-board-lists-and-formatting.png"),
+  fullPage: true,
+});
+
+await page.goto(sidebarUrl);
+await page.waitForTimeout(700);
+
+await page.screenshot({
+  path: path.join(screenshotDir, "bulletin-board-home-sidebar.png"),
   fullPage: true,
 });
 

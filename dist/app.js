@@ -14,6 +14,8 @@
     client: null,
     context: null,
     storageKey: "",
+    widgetId: "",
+    layoutMode: "full", // "full" | "sidebar"
     notes: [],
     selectedNoteId: null,
     searchQuery: "",
@@ -37,6 +39,11 @@
     bindEvents();
     buildColorPicker();
 
+    const query = new URLSearchParams(window.location.search);
+    state.widgetId = detectWidgetId(query);
+    state.layoutMode = determineLayoutMode(state.widgetId, query);
+    applyLayoutMode(state.layoutMode);
+
     const runtime = await initializeRuntime();
     state.client = runtime.client;
     state.context = runtime.context;
@@ -45,7 +52,6 @@
     updateHeader(runtime);
     loadNotes();
 
-    const query = new URLSearchParams(window.location.search);
     if (state.notes.length === 0 && shouldSeedDemo(query)) {
       seedDemoNotes();
     }
@@ -59,6 +65,41 @@
     }
 
     renderAll();
+  }
+
+  function detectWidgetId(query) {
+    return (
+      query.get("widgetId") ||
+      query.get("widgetIdentifier") ||
+      query.get("widget") ||
+      ""
+    );
+  }
+
+  function determineLayoutMode(widgetId, query) {
+    const explicit = String(query.get("layout") || "").toLowerCase();
+    if (explicit === "sidebar" || explicit === "rail") {
+      return "sidebar";
+    }
+
+    // Use the widget identifier to switch to a compact layout for the
+    // Home right-sidebar placement (typically configured under Personal Tasks).
+    if (widgetId === "customer-bulletin-board-home-right") {
+      return "sidebar";
+    }
+
+    // Auto-detect a right-rail embed: narrow iframe/container.
+    // This doesn't guarantee placement, but ensures the UI fits there.
+    if (window.innerWidth > 0 && window.innerWidth <= 640) {
+      return "sidebar";
+    }
+
+    return "full";
+  }
+
+  function applyLayoutMode(mode) {
+    document.body.classList.toggle("layout-sidebar", mode === "sidebar");
+    document.body.classList.toggle("layout-full", mode !== "sidebar");
   }
 
   function cacheDomReferences() {
@@ -227,10 +268,17 @@
 
   function updateHeader(runtime) {
     const context = runtime.context;
-    const view = context.projectName || "Customer home";
+    const view =
+      context.projectName ||
+      (state.layoutMode === "sidebar" ? "Home (right sidebar)" : "Customer home");
 
-    refs.boardScope.textContent =
-      "Scope: " + context.accountName + " / " + view + " bulletin board";
+    if (state.layoutMode === "sidebar") {
+      refs.boardScope.textContent =
+        "Configured for Home right sidebar (place under Personal Tasks)";
+    } else {
+      refs.boardScope.textContent =
+        "Scope: " + context.accountName + " / " + view + " bulletin board";
+    }
 
     if (runtime.connected) {
       refs.connectionBadge.className = "badge badge-ok";

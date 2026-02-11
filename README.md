@@ -96,6 +96,7 @@ Screenshots generated for review:
 
 - `docs/screenshots/bulletin-board-overview.png`
 - `docs/screenshots/bulletin-board-lists-and-formatting.png`
+- `docs/screenshots/bulletin-board-home-sidebar.png` (compact right-rail layout)
 
 ## Packaging for upload
 

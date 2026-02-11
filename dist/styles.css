@@ -97,6 +97,22 @@ h1 {
   border-color: #ffdca3;
 }
 
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: #d62c3b;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 18px rgba(214, 44, 59, 0.32);
+}
+
 .control-row {
   margin-top: 1rem;
   display: grid;
@@ -447,6 +463,12 @@ body.layout-sidebar .app-header {
 
 body.layout-sidebar h1 {
   font-size: 1.25rem;
+}
+
+body.layout-sidebar .unread-badge {
+  height: 24px;
+  min-width: 24px;
+  font-size: 0.78rem;
 }
 
 body.layout-sidebar .control-row {

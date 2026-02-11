@@ -60,23 +60,34 @@ Reference page used while designing:
 - `dist/index.html` — app shell
 - `dist/styles.css` — sticky note + editor styles
 - `dist/app.js` — app logic and Rocketlane runtime integration
+- `dist/client-events.js` — client events (unread badge/toast notifications)
 - `dist/icon.svg` — app icon
+- `server-actions/bulletin-board.js` — server actions using Rocketlane KV store
 
 ## Add this app to Rocketlane
 
-1. Create or open a Rocketlane app project (using `rli init` if needed).
-2. Copy these files into the project root:
-   - `index.js`
-   - `dist/` directory
-3. Build and deploy:
-   - `rli build`
-   - `rli deploy`
-4. In Rocketlane:
-   - Go to Customer Portal Builder.
-   - Click **Add Sections**.
-   - Select **Customer Bulletin Board** (placeholder: `customer_portal_widget`).
+Rocketlane Marketplace placeholders exposed by the public CLI/docs currently include:
+`project_tab`, `accounts_tab`, `left_nav`, `customer_portal_widget`.
 
-The manifest also includes `left_nav` so teams can open the board from workspace navigation.
+Because **Home (H)** is not exposed as a supported placeholder, this app ships with:
+
+- **Bulletin Board (Full)** (`left_nav`)
+- **Bulletin Board (Home sidebar)** (`customer_portal_widget`) — compact layout intended for right-rail style embeds
+- A **notification mechanism** (client events) that shows unread-count badges/toasts when new posts are added.
+
+To install:
+
+1. Generate an upload ZIP:
+
+   ```bash
+   npm install
+   npm run package:rli
+   ```
+
+   Output: `artifacts/rocketlane-bulletin-board-app.rli.zip`
+
+2. Upload the ZIP in Rocketlane **Custom Apps / Apps** screen.
+3. Add/place widgets as supported by your Rocketlane instance.
 
 ## Local preview
 

@@ -11,7 +11,7 @@ ZIP_PATH="artifacts/${ZIP_NAME}"
 
 rm -f "${ZIP_PATH}"
 
-# Minimal payload Rocketlane needs: manifest + entrypoint assets.
-zip -r "${ZIP_PATH}" index.js dist package.json README.md >/dev/null
+# Minimal payload Rocketlane needs: manifest + entrypoint assets + server actions.
+zip -r "${ZIP_PATH}" index.js dist server-actions package.json README.md >/dev/null
 
 echo "Created ${ZIP_PATH}"

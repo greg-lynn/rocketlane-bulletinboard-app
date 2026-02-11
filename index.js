@@ -22,10 +22,53 @@ const widgets = [
   },
 ];
 
+const {
+  bbListNotes,
+  bbUpsertNote,
+  bbDeleteNote,
+  bbClearNotes,
+  bbGetUnreadCount,
+  bbMarkRead,
+} = require("./server-actions/bulletin-board");
+
+const serverActions = [
+  {
+    name: "bb_listNotes",
+    description: "List bulletin board notes.",
+    run: bbListNotes,
+  },
+  {
+    name: "bb_upsertNote",
+    description: "Create or update a bulletin board note.",
+    run: bbUpsertNote,
+  },
+  {
+    name: "bb_deleteNote",
+    description: "Delete a bulletin board note.",
+    run: bbDeleteNote,
+  },
+  {
+    name: "bb_clearNotes",
+    description: "Clear all bulletin board notes.",
+    run: bbClearNotes,
+  },
+  {
+    name: "bb_getUnreadCount",
+    description: "Get unread bulletin board post count for the current user.",
+    run: bbGetUnreadCount,
+  },
+  {
+    name: "bb_markRead",
+    description: "Mark bulletin board posts as read for the current user.",
+    run: bbMarkRead,
+  },
+];
+
 module.exports = {
-  version: "1.0.0",
+  version: "1.1.0",
   widgets,
-  serverActions: [],
+  serverActions,
+  clientEvents: "dist/client-events.js",
   eventHandlers: {},
   scheduledActions: [],
 };

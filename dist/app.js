@@ -16,6 +16,8 @@
     storageKey: "",
     widgetId: "",
     layoutMode: "full", // "full" | "sidebar"
+    persistence: "local", // "local" | "server"
+    unreadCount: 0,
     notes: [],
     selectedNoteId: null,
     searchQuery: "",
@@ -50,14 +52,15 @@
     state.storageKey = createStorageKey(runtime.context);
 
     updateHeader(runtime);
-    loadNotes();
+    state.persistence = determinePersistenceMode(state.client);
+    await loadNotes();
 
     if (state.notes.length === 0 && shouldSeedDemo(query)) {
-      seedDemoNotes();
+      await seedDemoNotes();
     }
 
     if (state.notes.length === 0) {
-      createDefaultWelcomeNote();
+      await createDefaultWelcomeNote();
     }
 
     if (!state.selectedNoteId && state.notes.length > 0) {
@@ -65,6 +68,7 @@
     }
 
     renderAll();
+    scheduleReadTracking();
   }
 
   function detectWidgetId(query) {
@@ -105,6 +109,7 @@
   function cacheDomReferences() {
     refs.boardScope = document.getElementById("boardScope");
     refs.connectionBadge = document.getElementById("connectionBadge");
+    refs.unreadBadge = document.getElementById("unreadBadge");
     refs.addNoteButton = document.getElementById("addNoteButton");
     refs.seedDemoButton = document.getElementById("seedDemoButton");
     refs.clearBoardButton = document.getElementById("clearBoardButton");
@@ -125,8 +130,8 @@
 
   function bindEvents() {
     refs.addNoteButton.addEventListener("click", onAddNote);
-    refs.seedDemoButton.addEventListener("click", () => {
-      seedDemoNotes();
+    refs.seedDemoButton.addEventListener("click", async () => {
+      await seedDemoNotes();
       renderAll();
     });
     refs.clearBoardButton.addEventListener("click", onClearBoard);
@@ -165,16 +170,27 @@
     const query = new URLSearchParams(window.location.search);
     const fallback = getContextFromQuery(query);
 
-    if (!window.rliSdk || typeof window.rliSdk.init !== "function") {
-      return {
-        client: null,
-        connected: false,
-        context: fallback,
-      };
-    }
-
     try {
-      const client = await window.rliSdk.init({});
+      const client = await initRocketlaneClient();
+      if (!client) {
+        return {
+          client: null,
+          connected: false,
+          context: fallback,
+        };
+      }
+
+      // Prefer the context() API when available (used by RocketlaneApp SDK).
+      const contextObj = await safeGetContext(client);
+      if (contextObj) {
+        return {
+          client,
+          connected: true,
+          context: mergeContextFromContextObj(fallback, contextObj),
+        };
+      }
+
+      // Fallback to data method when context() is unavailable.
       const [account, user, project] = await Promise.all([
         safeGetClientData(client, "account"),
         safeGetClientData(client, "user"),
@@ -194,6 +210,71 @@
         context: fallback,
       };
     }
+  }
+
+  async function initRocketlaneClient() {
+    // Newer Marketplace SDK.
+    if (window.rliSdk && typeof window.rliSdk.init === "function") {
+      try {
+        return await window.rliSdk.init({});
+      } catch (_error) {
+        // fall through
+      }
+    }
+
+    // Older/basic template SDK.
+    if (window.rocketlaneApp && typeof window.rocketlaneApp.init === "function") {
+      try {
+        return await window.rocketlaneApp.init();
+      } catch (_error2) {
+        // fall through
+      }
+    }
+
+    return null;
+  }
+
+  async function safeGetContext(client) {
+    if (!client || typeof client.context !== "function") {
+      return null;
+    }
+    try {
+      return await client.context();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function mergeContextFromContextObj(fallback, ctx) {
+    return {
+      accountId:
+        pickFirst(
+          (ctx.company && (ctx.company.id || ctx.company.companyId)) ||
+            (ctx.account && (ctx.account.id || ctx.account.accountId)) ||
+            ctx.accountId
+        ) || fallback.accountId,
+      accountName:
+        pickFirst(
+          (ctx.company &&
+            (ctx.company.companyName || ctx.company.name || ctx.company.displayName)) ||
+            (ctx.account &&
+              (ctx.account.name || ctx.account.accountName || ctx.account.displayName)) ||
+            ctx.accountName
+        ) || fallback.accountName,
+      userId:
+        pickFirst(ctx.user && (ctx.user.id || ctx.user.userId || ctx.user.email)) ||
+        fallback.userId,
+      userName:
+        pickFirst(ctx.user && (ctx.user.fullName || ctx.user.name || ctx.user.email)) ||
+        fallback.userName,
+      projectId:
+        pickFirst(
+          ctx.project && (ctx.project.id || ctx.project.projectId || ctx.project._id)
+        ) || fallback.projectId,
+      projectName:
+        pickFirst(ctx.project && (ctx.project.projectName || ctx.project.name)) ||
+        fallback.projectName,
+    };
   }
 
   async function safeGetClientData(client, objectName) {
@@ -297,7 +378,65 @@
     return STORAGE_PREFIX + ":" + accountScope + ":" + viewScope;
   }
 
-  function loadNotes() {
+  function determinePersistenceMode(client) {
+    return canInvokeServerActions(client) ? "server" : "local";
+  }
+
+  function canInvokeServerActions(client) {
+    return (
+      client &&
+      client.data &&
+      typeof client.data.invoke === "function"
+    );
+  }
+
+  async function invokeAction(name, payload) {
+    if (!canInvokeServerActions(state.client)) {
+      return null;
+    }
+
+    try {
+      const resp = await state.client.data.invoke(name, payload || {});
+      // Rocketlane SDK responses wrap payload in { response }.
+      return resp && Object.prototype.hasOwnProperty.call(resp, "response")
+        ? resp.response
+        : resp;
+    } catch (error) {
+      console.warn("Server action failed:", name, error);
+      return null;
+    }
+  }
+
+  function applyNotesResponse(data) {
+    if (!data) {
+      return;
+    }
+
+    if (Array.isArray(data.notes)) {
+      state.notes = data.notes.map((note) => normalizeNote(note));
+    }
+
+    const unread =
+      typeof data.unreadCount === "number"
+        ? data.unreadCount
+        : typeof data.unread === "number"
+          ? data.unread
+          : 0;
+    state.unreadCount = Math.max(0, Number(unread) || 0);
+  }
+
+  async function loadNotes() {
+    if (state.persistence === "server") {
+      const data = await invokeAction("bb_listNotes", {});
+      if (data) {
+        applyNotesResponse(data);
+        return;
+      }
+
+      // If the server action fails for any reason, fall back to local mode.
+      state.persistence = "local";
+    }
+
     const raw = window.localStorage.getItem(state.storageKey);
     if (!raw) {
       state.notes = [];
@@ -318,9 +457,66 @@
     }
   }
 
-  function persistNotes() {
+  async function persistNotes() {
+    if (state.persistence === "server") {
+      const note = getSelectedNote();
+      if (!note) {
+        return;
+      }
+
+      const data = await invokeAction("bb_upsertNote", { note });
+      if (data) {
+        applyNotesResponse(data);
+        renderUnreadBadge();
+        renderNotesGrid();
+        renderStats();
+      }
+      setSaveState("Saved " + formatTime(new Date().toISOString()));
+      return;
+    }
+
     window.localStorage.setItem(state.storageKey, JSON.stringify(state.notes));
     setSaveState("Saved " + formatTime(new Date().toISOString()));
+  }
+
+  function scheduleReadTracking() {
+    if (state.persistence !== "server") {
+      return;
+    }
+    if (state._readTrackingInstalled) {
+      return;
+    }
+    state._readTrackingInstalled = true;
+
+    // Mark as read shortly after opening the board.
+    window.setTimeout(() => {
+      markReadNow().catch(() => {});
+    }, 2500);
+
+    window.addEventListener("focus", () => {
+      markReadNow().catch(() => {});
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        markReadNow().catch(() => {});
+      }
+    });
+  }
+
+  async function markReadNow() {
+    if (state.persistence !== "server") {
+      return;
+    }
+
+    const data = await invokeAction("bb_markRead", {
+      lastSeenAt: new Date().toISOString(),
+    });
+    if (data) {
+      applyNotesResponse(data);
+      renderUnreadBadge();
+      renderStats();
+    }
   }
 
   function queueSave() {
@@ -330,7 +526,10 @@
     }
 
     state.saveTimer = window.setTimeout(() => {
-      persistNotes();
+      persistNotes().catch((error) => {
+        console.warn("Save failed", error);
+        setSaveState("Save failed (will retry)");
+      });
     }, 240);
   }
 
@@ -338,7 +537,7 @@
     refs.saveState.textContent = text;
   }
 
-  function createDefaultWelcomeNote() {
+  async function createDefaultWelcomeNote() {
     const note = normalizeNote({
       title: "Welcome to your customer bulletin board",
       pinned: true,
@@ -351,10 +550,16 @@
 
     state.notes = [note];
     state.selectedNoteId = note.id;
-    persistNotes();
+    await persistNotes();
   }
 
-  function seedDemoNotes() {
+  async function seedDemoNotes() {
+    if (state.persistence === "server") {
+      // Avoid writing demo data into a shared board.
+      setSaveState("Demo notes are disabled in connected mode");
+      return;
+    }
+
     const now = Date.now();
     const demo = [
       {
@@ -396,10 +601,10 @@
 
     state.notes = demo.map((item) => normalizeNote(item));
     state.selectedNoteId = state.notes[0] ? state.notes[0].id : null;
-    persistNotes();
+    await persistNotes();
   }
 
-  function onAddNote() {
+  async function onAddNote() {
     const next = normalizeNote({
       title: "Untitled note",
       color: NOTE_COLORS[0].id,
@@ -407,13 +612,13 @@
     });
     state.notes.unshift(next);
     state.selectedNoteId = next.id;
-    persistNotes();
+    await persistNotes();
     renderAll();
     refs.noteTitleInput.focus();
     refs.noteTitleInput.select();
   }
 
-  function onClearBoard() {
+  async function onClearBoard() {
     if (!state.notes.length) {
       return;
     }
@@ -426,9 +631,22 @@
       return;
     }
 
+    if (state.persistence === "server") {
+      setSaveState("Clearing...");
+      const data = await invokeAction("bb_clearNotes", {});
+      if (data) {
+        applyNotesResponse(data);
+        state.selectedNoteId = null;
+        renderAll();
+        return;
+      }
+      setSaveState("Clear failed");
+      return;
+    }
+
     state.notes = [];
     state.selectedNoteId = null;
-    persistNotes();
+    await persistNotes();
     renderAll();
   }
 
@@ -476,7 +694,7 @@
     renderAll();
   }
 
-  function onDeleteFromEditor() {
+  async function onDeleteFromEditor() {
     const note = getSelectedNote();
     if (!note) {
       return;
@@ -489,10 +707,24 @@
       return;
     }
 
+    if (state.persistence === "server") {
+      setSaveState("Deleting...");
+      const data = await invokeAction("bb_deleteNote", { noteId: note.id });
+      if (data) {
+        applyNotesResponse(data);
+        const visible = getVisibleNotes();
+        state.selectedNoteId = visible[0] ? visible[0].id : null;
+        renderAll();
+        return;
+      }
+      setSaveState("Delete failed");
+      return;
+    }
+
     state.notes = state.notes.filter((item) => item.id !== note.id);
     const visible = getVisibleNotes();
     state.selectedNoteId = visible[0] ? visible[0].id : null;
-    persistNotes();
+    await persistNotes();
     renderAll();
   }
 
@@ -525,9 +757,30 @@
   }
 
   function renderAll() {
+    renderUnreadBadge();
     renderNotesGrid();
     renderEditor();
     renderStats();
+
+    if (refs.seedDemoButton) {
+      refs.seedDemoButton.classList.toggle("hidden", state.persistence === "server");
+    }
+  }
+
+  function renderUnreadBadge() {
+    if (!refs.unreadBadge) {
+      return;
+    }
+
+    const count = Math.max(0, Number(state.unreadCount) || 0);
+    if (count <= 0) {
+      refs.unreadBadge.textContent = "";
+      refs.unreadBadge.classList.add("hidden");
+      return;
+    }
+
+    refs.unreadBadge.textContent = count > 99 ? "99+" : String(count);
+    refs.unreadBadge.classList.remove("hidden");
   }
 
   function renderStats() {
@@ -569,6 +822,7 @@
       card.addEventListener("click", () => {
         state.selectedNoteId = note.id;
         renderAll();
+        markReadNow().catch(() => {});
       });
 
       card.addEventListener("keydown", (event) => {
@@ -576,6 +830,7 @@
           event.preventDefault();
           state.selectedNoteId = note.id;
           renderAll();
+          markReadNow().catch(() => {});
         }
       });
 

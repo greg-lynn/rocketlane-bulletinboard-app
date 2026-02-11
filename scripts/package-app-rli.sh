@@ -13,6 +13,7 @@ cleanup() {
 trap cleanup EXIT
 
 cp -R "${ROOT_DIR}/dist" "${TMP_DIR}/dist"
+cp -R "${ROOT_DIR}/server-actions" "${TMP_DIR}/server-actions"
 cp "${ROOT_DIR}/index.js" "${TMP_DIR}/index.js"
 cp "${ROOT_DIR}/package.json" "${TMP_DIR}/package.json"
 

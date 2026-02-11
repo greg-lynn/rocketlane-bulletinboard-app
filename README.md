@@ -96,3 +96,15 @@ Screenshots generated for review:
 
 - `docs/screenshots/bulletin-board-overview.png`
 - `docs/screenshots/bulletin-board-lists-and-formatting.png`
+
+## Packaging for upload
+
+This repo includes a script that creates a minimal ZIP bundle (manifest + `dist/`) suitable for uploading/adding as a custom app:
+
+```bash
+npm run package:zip
+```
+
+Output:
+
+- `artifacts/rocketlane-bulletin-board-app.zip`

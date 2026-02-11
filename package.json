@@ -6,6 +6,7 @@
   "scripts": {
     "check:js": "node --check dist/app.js && node --check index.js",
     "package:zip": "bash scripts/package-app.sh",
+    "package:rli": "bash scripts/package-app-rli.sh",
     "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "devDependencies": {

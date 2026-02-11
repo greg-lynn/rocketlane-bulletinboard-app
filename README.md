@@ -108,3 +108,13 @@ npm run package:zip
 Output:
 
 - `artifacts/rocketlane-bulletin-board-app.zip`
+
+If you prefer generating a Rocketlane-validated build ZIP using the official RLI build process:
+
+```bash
+npm run package:rli
+```
+
+Output:
+
+- `artifacts/rocketlane-bulletin-board-app.rli.zip`

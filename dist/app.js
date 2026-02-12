@@ -133,6 +133,7 @@
 
   function cacheDomReferences() {
     refs.boardScope = document.getElementById("boardScope");
+    refs.featureBadge = document.getElementById("featureBadge");
     refs.connectionBadge = document.getElementById("connectionBadge");
     refs.unreadBadge = document.getElementById("unreadBadge");
     refs.addNoteButton = document.getElementById("addNoteButton");
@@ -474,6 +475,10 @@
     } else {
       refs.connectionBadge.className = "badge badge-local";
       refs.connectionBadge.textContent = "Local preview mode";
+    }
+
+    if (refs.featureBadge) {
+      refs.featureBadge.textContent = "Logs + lists v1.4";
     }
   }
 
@@ -1259,9 +1264,22 @@
       const editor = refs.noteBodyInput;
       const selection = window.getSelection();
       const list = document.createElement(listType);
-      const li = document.createElement("li");
-      li.textContent = "List item";
-      list.appendChild(li);
+      const selectedText =
+        selection && typeof selection.toString === "function"
+          ? selection.toString().trim()
+          : "";
+      const items = selectedText
+        ? selectedText
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+        : ["List item"];
+
+      items.forEach((itemText) => {
+        const li = document.createElement("li");
+        li.textContent = itemText;
+        list.appendChild(li);
+      });
 
       if (!selection || selection.rangeCount === 0) {
         editor.appendChild(list);
@@ -1277,7 +1295,9 @@
       }
 
       const nextRange = document.createRange();
-      nextRange.selectNodeContents(li);
+      const firstLi = list.querySelector("li");
+      const focusLi = firstLi || list;
+      nextRange.selectNodeContents(focusLi);
       nextRange.collapse(false);
       selection.removeAllRanges();
       selection.addRange(nextRange);
@@ -1835,11 +1855,54 @@
   }
 
   function summarize(html, maxLength) {
-    const text = stripHtml(html).replace(/\s+/g, " ").trim();
+    const text = richTextToPreview(html).replace(/\s+/g, " ").trim();
     if (!text) {
       return "No content yet.";
     }
     return text.length > maxLength ? text.slice(0, maxLength - 1) + "…" : text;
+  }
+
+  function richTextToPreview(html) {
+    const container = document.createElement("div");
+    container.innerHTML = html || "";
+    const chunks = [];
+
+    container.childNodes.forEach((node) => {
+      if (!node) {
+        return;
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        const raw = String(node.textContent || "").trim();
+        if (raw) {
+          chunks.push(raw);
+        }
+        return;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+
+      const tag = node.tagName ? node.tagName.toLowerCase() : "";
+      if (tag === "ul" || tag === "ol") {
+        const items = Array.from(node.querySelectorAll(":scope > li"));
+        items.forEach((li, idx) => {
+          const text = String(li.textContent || "").trim();
+          if (!text) {
+            return;
+          }
+          const prefix = tag === "ol" ? `${idx + 1}. ` : "• ";
+          chunks.push(prefix + text);
+        });
+      } else {
+        const text = String(node.textContent || "").trim();
+        if (text) {
+          chunks.push(text);
+        }
+      }
+    });
+
+    return chunks.join(" ");
   }
 
   function stripHtml(html) {

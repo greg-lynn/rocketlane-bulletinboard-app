@@ -99,6 +99,14 @@ To install:
 2. Upload the ZIP in Rocketlane **Custom Apps / Apps** screen.
 3. Add/place widgets as supported by your Rocketlane instance.
 
+### Deployment verification
+
+After upload, open the app and confirm you see the header badge:
+
+- `Logs + lists v1.4`
+
+If that badge is missing, Rocketlane is still serving an older app build and you should re-upload the latest `artifacts/rocketlane-bulletin-board-app.rli.zip`.
+
 ## Local preview
 
 Open `dist/index.html` directly in a browser.

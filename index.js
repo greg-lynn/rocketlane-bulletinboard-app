@@ -20,17 +20,6 @@ const widgets = [
       html: "dist/index.html",
     },
   },
-  {
-    identifier: "customer-bulletin-board-error-logs",
-    location: ["left_nav"],
-    name: "Bulletin Board Error Logs",
-    description:
-      "Detailed error logs for bulletin board failures, including fix guidance.",
-    icon: "dist/error-icon.svg",
-    entrypoint: {
-      html: "dist/error-logs.html",
-    },
-  },
 ];
 
 const {
@@ -48,6 +37,12 @@ const {
   bbClearErrorLogs,
   bbMarkErrorResolved,
 } = require("./server-actions/error-logs");
+
+const {
+  bbLogActivity,
+  bbListActivityLogs,
+  bbClearActivityLogs,
+} = require("./server-actions/activity-logs");
 
 const serverActions = [
   {
@@ -100,10 +95,25 @@ const serverActions = [
     description: "Mark an error log entry as resolved.",
     run: bbMarkErrorResolved,
   },
+  {
+    name: "bb_logActivity",
+    description: "Log bulletin board activity entry.",
+    run: bbLogActivity,
+  },
+  {
+    name: "bb_listActivityLogs",
+    description: "List bulletin board activity logs.",
+    run: bbListActivityLogs,
+  },
+  {
+    name: "bb_clearActivityLogs",
+    description: "Clear bulletin board activity logs.",
+    run: bbClearActivityLogs,
+  },
 ];
 
 module.exports = {
-  version: "1.2.0",
+  version: "1.3.0",
   widgets,
   serverActions,
   clientEvents: "dist/client-events.js",

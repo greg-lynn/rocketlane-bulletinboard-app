@@ -21,6 +21,14 @@
     persistence: "local", // "local" | "server"
     unreadCount: 0,
     errorCount: 0,
+    mainTab: "board", // "board" | "logs"
+    logsSubTab: "activity", // "activity" | "errors"
+    activityLogs: [],
+    errorLogs: [],
+    logSummary: { info: 0, warn: 0, error: 0 },
+    logsSearch: "",
+    logsSeverity: "all",
+    logsStatus: "all",
     notes: [],
     selectedNoteId: null,
     searchQuery: "",
@@ -82,8 +90,10 @@
       state.selectedNoteId = state.notes[0].id;
     }
 
+    await refreshLogsData();
     renderAll();
     scheduleReadTracking();
+    scheduleLogsPolling();
   }
 
   function detectWidgetId(query) {
@@ -141,6 +151,24 @@
     refs.saveState = document.getElementById("saveState");
     refs.pinNoteButton = document.getElementById("pinNoteButton");
     refs.deleteNoteButton = document.getElementById("deleteNoteButton");
+    refs.mainTabBoard = document.getElementById("mainTabBoard");
+    refs.mainTabLogs = document.getElementById("mainTabLogs");
+    refs.logsTabBadge = document.getElementById("logsTabBadge");
+    refs.boardPanel = document.getElementById("boardPanel");
+    refs.logsPanel = document.getElementById("logsPanel");
+    refs.logsSubTabActivity = document.getElementById("logsSubTabActivity");
+    refs.logsSubTabErrors = document.getElementById("logsSubTabErrors");
+    refs.errorLogsBadge = document.getElementById("errorLogsBadge");
+    refs.logsSearchInput = document.getElementById("logsSearchInput");
+    refs.logsSeverityFilter = document.getElementById("logsSeverityFilter");
+    refs.logsStatusFilter = document.getElementById("logsStatusFilter");
+    refs.refreshLogsButton = document.getElementById("refreshLogsButton");
+    refs.clearLogsButton = document.getElementById("clearLogsButton");
+    refs.logsSummary = document.getElementById("logsSummary");
+    refs.logsStatusLine = document.getElementById("logsStatusLine");
+    refs.activityLogsList = document.getElementById("activityLogsList");
+    refs.errorLogsList = document.getElementById("errorLogsList");
+    refs.logsEmptyState = document.getElementById("logsEmptyState");
   }
 
   function bindEvents() {
@@ -169,6 +197,70 @@
     refs.deleteNoteButton.addEventListener("click", onDeleteFromEditor);
 
     refs.colorPicker.addEventListener("click", onColorSwatchClick);
+
+    if (refs.mainTabBoard) {
+      refs.mainTabBoard.addEventListener("click", () => {
+        state.mainTab = "board";
+        renderAll();
+      });
+    }
+
+    if (refs.mainTabLogs) {
+      refs.mainTabLogs.addEventListener("click", async () => {
+        state.mainTab = "logs";
+        await refreshLogsData();
+        renderAll();
+      });
+    }
+
+    if (refs.logsSubTabActivity) {
+      refs.logsSubTabActivity.addEventListener("click", () => {
+        state.logsSubTab = "activity";
+        renderAll();
+      });
+    }
+
+    if (refs.logsSubTabErrors) {
+      refs.logsSubTabErrors.addEventListener("click", async () => {
+        state.logsSubTab = "errors";
+        renderAll();
+        await markErrorsViewed();
+      });
+    }
+
+    if (refs.logsSearchInput) {
+      refs.logsSearchInput.addEventListener("input", (event) => {
+        state.logsSearch = String(event.target.value || "").toLowerCase().trim();
+        renderLogLists();
+      });
+    }
+
+    if (refs.logsSeverityFilter) {
+      refs.logsSeverityFilter.addEventListener("change", (event) => {
+        state.logsSeverity = event.target.value || "all";
+        renderLogLists();
+      });
+    }
+
+    if (refs.logsStatusFilter) {
+      refs.logsStatusFilter.addEventListener("change", (event) => {
+        state.logsStatus = event.target.value || "all";
+        renderLogLists();
+      });
+    }
+
+    if (refs.refreshLogsButton) {
+      refs.refreshLogsButton.addEventListener("click", async () => {
+        await refreshLogsData();
+        renderAll();
+      });
+    }
+
+    if (refs.clearLogsButton) {
+      refs.clearLogsButton.addEventListener("click", async () => {
+        await clearCurrentLogTab();
+      });
+    }
 
     document.querySelectorAll(".format-button").forEach((button) => {
       button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -420,7 +512,7 @@
         steps: [
           "Refresh the Rocketlane page.",
           "If this keeps happening, re-upload the latest app ZIP.",
-          "Check the Error Logs app for technical context.",
+          "Check Logs > Error Logs for technical context.",
         ],
       };
     }
@@ -452,18 +544,18 @@
         steps: [
           "Run `npm run package:rli` and upload the new ZIP.",
           "Refresh Rocketlane and retry.",
-          "Use Bulletin Board Error Logs to inspect detailed failure metadata.",
+          "Use Logs > Error Logs to inspect detailed failure metadata.",
         ],
       };
     }
 
     return {
       summary:
-        "Refresh Rocketlane and retry. If it repeats, review this error in the Error Logs app.",
+        "Refresh Rocketlane and retry. If it repeats, review this error in Logs > Error Logs.",
       steps: [
         "Refresh the page.",
         "Retry the action.",
-        "Open Bulletin Board Error Logs for detailed fix guidance.",
+        "Open Logs > Error Logs for detailed fix guidance.",
       ],
     };
   }
@@ -491,6 +583,19 @@
       state.errorCount = next.length;
     } catch (_error) {
       // ignore local fallback write issues
+    }
+  }
+
+  function getLocalFallbackErrors() {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_ERROR_LOG_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_error) {
+      return [];
     }
   }
 
@@ -523,6 +628,9 @@
     ) {
       try {
         await state.client.data.invoke("bb_logError", { log: record });
+        if (state.mainTab === "logs") {
+          await refreshLogsData();
+        }
         return;
       } catch (_error2) {
         // continue to local fallback
@@ -534,6 +642,10 @@
       createdAt: new Date().toISOString(),
       context: state.context || {},
     });
+    state.errorLogs = getLocalFallbackErrors();
+    state.logSummary = summarizeErrorSeverities(state.errorLogs);
+    updateErrorCounts();
+    renderLogLists();
   }
 
   function installGlobalErrorHandlers() {
@@ -681,7 +793,7 @@
       }
       setUserFacingError(
         "Unable to save the note right now.",
-        "Retry in a few seconds. If it persists, check Bulletin Board Error Logs."
+        "Retry in a few seconds. If it persists, check Logs > Error Logs."
       );
       return;
     }
@@ -728,6 +840,155 @@
       renderUnreadBadge();
       renderStats();
     }
+  }
+
+  function scheduleLogsPolling() {
+    if (state._logsPollingInstalled) {
+      return;
+    }
+    state._logsPollingInstalled = true;
+
+    const poll = () => {
+      refreshLogsData().catch(() => {});
+    };
+
+    window.setInterval(poll, 30000);
+    window.addEventListener("focus", poll);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        poll();
+      }
+    });
+  }
+
+  async function refreshLogsData() {
+    if (state.persistence !== "server") {
+      const localErrors = getLocalFallbackErrors();
+      state.errorLogs = localErrors;
+      state.activityLogs = [];
+      state.logSummary = summarizeErrorSeverities(localErrors);
+      updateErrorCounts();
+      setLogsStatusLine(
+        localErrors.length
+          ? `Showing ${localErrors.length} locally cached error log(s).`
+          : "No server connection. Activity/error logs are limited in local mode."
+      );
+      return;
+    }
+
+    const [activityData, errorData] = await Promise.all([
+      invokeAction("bb_listActivityLogs", {}),
+      invokeAction("bb_listErrors", {}),
+    ]);
+
+    if (activityData && Array.isArray(activityData.logs)) {
+      state.activityLogs = activityData.logs;
+    }
+
+    if (errorData && Array.isArray(errorData.logs)) {
+      state.errorLogs = errorData.logs;
+      state.logSummary =
+        errorData.summary && typeof errorData.summary === "object"
+          ? errorData.summary
+          : summarizeErrorSeverities(errorData.logs);
+      setLogsStatusLine(
+        `Logs updated ${formatTime(errorData.updatedAt || new Date().toISOString())}`
+      );
+    }
+
+    updateErrorCounts();
+    renderLogLists();
+  }
+
+  function setLogsStatusLine(text) {
+    if (!refs.logsStatusLine) {
+      return;
+    }
+    refs.logsStatusLine.textContent = text || "";
+  }
+
+  function summarizeErrorSeverities(logs) {
+    return (Array.isArray(logs) ? logs : []).reduce(
+      (acc, item) => {
+        const sev = normalizeSeverity(item && item.severity);
+        acc[sev] += 1;
+        return acc;
+      },
+      { info: 0, warn: 0, error: 0 }
+    );
+  }
+
+  function normalizeSeverity(value) {
+    const normalized = String(value || "error").toLowerCase();
+    if (normalized === "info" || normalized === "warn" || normalized === "error") {
+      return normalized;
+    }
+    return "error";
+  }
+
+  function updateErrorCounts() {
+    const openErrors = state.errorLogs.filter((item) => item && !item.resolvedAt).length;
+    state.errorCount = Math.max(0, openErrors);
+    renderLogBadges();
+  }
+
+  function renderLogBadges() {
+    const count = Math.max(0, Number(state.errorCount) || 0);
+    const text = count > 99 ? "99+" : String(count);
+
+    if (refs.errorLogsBadge) {
+      if (count > 0) {
+        refs.errorLogsBadge.textContent = text;
+        refs.errorLogsBadge.classList.remove("hidden");
+      } else {
+        refs.errorLogsBadge.textContent = "";
+        refs.errorLogsBadge.classList.add("hidden");
+      }
+    }
+
+    if (refs.logsTabBadge) {
+      if (count > 0) {
+        refs.logsTabBadge.textContent = text;
+        refs.logsTabBadge.classList.remove("hidden");
+      } else {
+        refs.logsTabBadge.textContent = "";
+        refs.logsTabBadge.classList.add("hidden");
+      }
+    }
+  }
+
+  async function markErrorsViewed() {
+    // Currently bubble reflects open error count. Hook exists for future "unseen only" behavior.
+    return Promise.resolve();
+  }
+
+  async function clearCurrentLogTab() {
+    const tabName = state.logsSubTab === "errors" ? "error logs" : "activity logs";
+    const confirmed = window.confirm(`Clear all ${tabName}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    if (state.persistence !== "server") {
+      if (state.logsSubTab === "errors") {
+        window.localStorage.removeItem(LOCAL_ERROR_LOG_KEY);
+        state.errorLogs = [];
+      } else {
+        state.activityLogs = [];
+      }
+      updateErrorCounts();
+      renderLogLists();
+      setLogsStatusLine(`Cleared ${tabName} (local mode).`);
+      return;
+    }
+
+    if (state.logsSubTab === "errors") {
+      await invokeAction("bb_clearErrorLogs", {});
+    } else {
+      await invokeAction("bb_clearActivityLogs", {});
+    }
+    await refreshLogsData();
+    renderAll();
   }
 
   function queueSave() {
@@ -1027,13 +1288,41 @@
   }
 
   function renderAll() {
+    renderMainPanels();
     renderUnreadBadge();
+    renderLogBadges();
     renderNotesGrid();
     renderEditor();
     renderStats();
+    renderLogLists();
+  }
+
+  function renderMainPanels() {
+    const isBoard = state.mainTab === "board";
+
+    if (refs.mainTabBoard) {
+      refs.mainTabBoard.classList.toggle("active", isBoard);
+    }
+    if (refs.mainTabLogs) {
+      refs.mainTabLogs.classList.toggle("active", !isBoard);
+    }
+
+    if (refs.boardPanel) {
+      refs.boardPanel.classList.toggle("hidden", !isBoard);
+    }
+    if (refs.logsPanel) {
+      refs.logsPanel.classList.toggle("hidden", isBoard);
+    }
+
+    if (refs.addNoteButton) {
+      refs.addNoteButton.classList.toggle("hidden", !isBoard);
+    }
 
     if (refs.seedDemoButton) {
-      refs.seedDemoButton.classList.toggle("hidden", state.persistence === "server");
+      refs.seedDemoButton.classList.toggle(
+        "hidden",
+        state.persistence === "server" || !isBoard
+      );
     }
   }
 
@@ -1065,6 +1354,303 @@
       " total notes (" +
       pinned +
       " pinned)";
+  }
+
+  function renderLogLists() {
+    if (!refs.activityLogsList || !refs.errorLogsList) {
+      return;
+    }
+
+    const showActivity = state.logsSubTab === "activity";
+    if (refs.logsSubTabActivity) {
+      refs.logsSubTabActivity.classList.toggle("active", showActivity);
+    }
+    if (refs.logsSubTabErrors) {
+      refs.logsSubTabErrors.classList.toggle("active", !showActivity);
+    }
+
+    if (refs.clearLogsButton) {
+      refs.clearLogsButton.textContent = showActivity
+        ? "Clear activity logs"
+        : "Clear error logs";
+    }
+
+    refs.activityLogsList.classList.toggle("hidden", !showActivity);
+    refs.errorLogsList.classList.toggle("hidden", showActivity);
+
+    if (refs.logsSeverityFilter) {
+      refs.logsSeverityFilter.disabled = showActivity;
+      refs.logsSeverityFilter.parentElement &&
+        refs.logsSeverityFilter.parentElement.classList.toggle("hidden", showActivity);
+    }
+    if (refs.logsStatusFilter) {
+      refs.logsStatusFilter.disabled = showActivity;
+      refs.logsStatusFilter.parentElement &&
+        refs.logsStatusFilter.parentElement.classList.toggle("hidden", showActivity);
+    }
+
+    if (showActivity) {
+      renderActivityLogCards();
+    } else {
+      renderErrorLogCards();
+    }
+    renderLogsSummary();
+  }
+
+  function renderLogsSummary() {
+    if (!refs.logsSummary) {
+      return;
+    }
+
+    const activityCount = state.activityLogs.length;
+    const errorCount = state.errorLogs.length;
+    const openErrors = state.errorLogs.filter((item) => !item || !item.resolvedAt).length;
+
+    refs.logsSummary.textContent =
+      `Activity entries: ${activityCount} | Error entries: ${errorCount} | Open errors: ${openErrors}`;
+  }
+
+  function renderActivityLogCards() {
+    const logs = getVisibleActivityLogs();
+    refs.activityLogsList.innerHTML = "";
+    refs.errorLogsList.innerHTML = "";
+
+    if (!logs.length) {
+      refs.logsEmptyState && refs.logsEmptyState.classList.remove("hidden");
+      return;
+    }
+
+    refs.logsEmptyState && refs.logsEmptyState.classList.add("hidden");
+
+    logs.forEach((log) => {
+      const card = document.createElement("article");
+      card.className = "log-card";
+
+      const head = document.createElement("div");
+      head.className = "log-head";
+      const sev = document.createElement("span");
+      sev.className = `log-severity ${normalizeSeverity(log.severity || "info")}`;
+      sev.textContent = normalizeSeverity(log.severity || "info").toUpperCase();
+      const code = document.createElement("span");
+      code.className = "log-code";
+      code.textContent = String(log.type || "activity");
+      const headLeft = document.createElement("div");
+      headLeft.appendChild(sev);
+      headLeft.appendChild(document.createTextNode(" "));
+      headLeft.appendChild(code);
+      head.appendChild(headLeft);
+
+      const title = document.createElement("h3");
+      title.className = "log-title";
+      title.textContent = String(log.title || "Activity");
+
+      const message = document.createElement("p");
+      message.className = "log-message";
+      message.textContent = String(log.message || "");
+
+      const meta = document.createElement("p");
+      meta.className = "log-meta";
+      meta.textContent = [
+        `When: ${formatTime(log.createdAt)}`,
+        log.context && log.context.userName ? `User: ${log.context.userName}` : "",
+        log.context && log.context.projectName
+          ? `Project: ${log.context.projectName}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" • ");
+
+      card.appendChild(head);
+      card.appendChild(title);
+      card.appendChild(message);
+
+      if (log.details) {
+        const details = document.createElement("details");
+        details.className = "log-details";
+        const summary = document.createElement("summary");
+        summary.textContent = "Details";
+        details.appendChild(summary);
+        const pre = document.createElement("pre");
+        pre.textContent = String(log.details);
+        details.appendChild(pre);
+        card.appendChild(details);
+      }
+
+      card.appendChild(meta);
+      refs.activityLogsList.appendChild(card);
+    });
+  }
+
+  function renderErrorLogCards() {
+    const logs = getVisibleErrorLogs();
+    refs.errorLogsList.innerHTML = "";
+    refs.activityLogsList.innerHTML = "";
+
+    if (!logs.length) {
+      refs.logsEmptyState && refs.logsEmptyState.classList.remove("hidden");
+      return;
+    }
+
+    refs.logsEmptyState && refs.logsEmptyState.classList.add("hidden");
+
+    logs.forEach((log) => {
+      const card = document.createElement("article");
+      card.className = "log-card" + (log.resolvedAt ? " resolved" : "");
+
+      const head = document.createElement("div");
+      head.className = "log-head";
+      const sev = document.createElement("span");
+      sev.className = `log-severity ${normalizeSeverity(log.severity)}`;
+      sev.textContent = normalizeSeverity(log.severity).toUpperCase();
+      const code = document.createElement("span");
+      code.className = "log-code";
+      code.textContent = String(log.code || "UNKNOWN");
+
+      const left = document.createElement("div");
+      left.appendChild(sev);
+      left.appendChild(document.createTextNode(" "));
+      left.appendChild(code);
+      head.appendChild(left);
+
+      if (!log.resolvedAt && state.persistence === "server") {
+        const resolveButton = document.createElement("button");
+        resolveButton.type = "button";
+        resolveButton.className = "btn btn-subtle";
+        resolveButton.textContent = "Mark resolved";
+        resolveButton.addEventListener("click", async () => {
+          await invokeAction("bb_markErrorResolved", {
+            errorId: log.id,
+            resolutionNote: "Resolved from in-app logs tab",
+          });
+          await refreshLogsData();
+          renderAll();
+        });
+        head.appendChild(resolveButton);
+      }
+
+      const title = document.createElement("h3");
+      title.className = "log-title";
+      title.textContent = String(log.title || "Bulletin board error");
+
+      const message = document.createElement("p");
+      message.className = "log-message";
+      message.textContent = String(log.message || "");
+
+      const fixBox = document.createElement("section");
+      fixBox.className = "log-fix-box";
+      const fixTitle = document.createElement("h4");
+      fixTitle.textContent = "How to fix";
+      fixBox.appendChild(fixTitle);
+
+      const fixSummary = document.createElement("p");
+      fixSummary.textContent = String(
+        (log.fix && log.fix.summary) || "No fix guidance available."
+      );
+      fixBox.appendChild(fixSummary);
+
+      const steps = Array.isArray(log.fix && log.fix.steps) ? log.fix.steps : [];
+      if (steps.length) {
+        const list = document.createElement("ol");
+        steps.forEach((step) => {
+          const li = document.createElement("li");
+          li.textContent = String(step);
+          list.appendChild(li);
+        });
+        fixBox.appendChild(list);
+      }
+
+      const meta = document.createElement("p");
+      meta.className = "log-meta";
+      meta.textContent = [
+        `When: ${formatTime(log.createdAt)}`,
+        log.source ? `Source: ${log.source}` : "",
+        log.context && log.context.userName ? `User: ${log.context.userName}` : "",
+        log.resolvedAt ? `Resolved: ${formatTime(log.resolvedAt)}` : "Status: Open",
+      ]
+        .filter(Boolean)
+        .join(" • ");
+
+      const details = document.createElement("details");
+      details.className = "log-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Technical details";
+      details.appendChild(summary);
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(
+        {
+          details: log.details || "",
+          stack: log.stack || "",
+          context: log.context || {},
+          meta: log.meta || {},
+        },
+        null,
+        2
+      );
+      details.appendChild(pre);
+
+      card.appendChild(head);
+      card.appendChild(title);
+      card.appendChild(message);
+      card.appendChild(fixBox);
+      card.appendChild(details);
+      card.appendChild(meta);
+      refs.errorLogsList.appendChild(card);
+    });
+  }
+
+  function getVisibleActivityLogs() {
+    const search = state.logsSearch;
+    return state.activityLogs.filter((log) => {
+      if (!search) {
+        return true;
+      }
+      const haystack = [
+        log.title,
+        log.message,
+        log.type,
+        log.details,
+        log.context && log.context.userName,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(search);
+    });
+  }
+
+  function getVisibleErrorLogs() {
+    const search = state.logsSearch;
+    return state.errorLogs.filter((log) => {
+      if (
+        state.logsSeverity !== "all" &&
+        normalizeSeverity(log && log.severity) !== state.logsSeverity
+      ) {
+        return false;
+      }
+
+      if (state.logsStatus === "open" && log && log.resolvedAt) {
+        return false;
+      }
+      if (state.logsStatus === "resolved" && (!log || !log.resolvedAt)) {
+        return false;
+      }
+
+      if (!search) {
+        return true;
+      }
+      const haystack = [
+        log && log.title,
+        log && log.message,
+        log && log.code,
+        log && log.source,
+        log && log.details,
+        log && log.fix && log.fix.summary,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(search);
+    });
   }
 
   function renderNotesGrid() {

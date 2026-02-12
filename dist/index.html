@@ -28,118 +28,184 @@
         </div>
       </header>
 
-      <section class="control-row">
-        <label class="control search-control">
-          <span>Search</span>
-          <input
-            id="searchInput"
-            type="search"
-            placeholder="Search notes, updates, action items..."
-          />
-        </label>
-        <label class="control">
-          <span>Filter</span>
-          <select id="filterSelect">
-            <option value="all">All notes</option>
-            <option value="pinned">Pinned first</option>
-            <option value="recent">Recently updated</option>
-          </select>
-        </label>
-        <button id="seedDemoButton" class="btn btn-subtle" type="button">
-          Load demo notes
-        </button>
-        <button id="clearBoardButton" class="btn btn-danger-subtle" type="button">
-          Clear board
+      <section class="main-tabs" aria-label="Main tabs">
+        <button id="mainTabBoard" class="main-tab active" type="button">Bulletin Board</button>
+        <button id="mainTabLogs" class="main-tab" type="button">
+          Logs
+          <span id="logsTabBadge" class="mini-badge hidden"></span>
         </button>
       </section>
 
-      <div id="boardStats" class="board-stats"></div>
-
-      <main class="content-grid">
-        <section class="notes-column">
-          <div id="notesGrid" class="notes-grid"></div>
-          <div id="notesEmptyState" class="empty-state hidden">
-            <h2>No notes found</h2>
-            <p>Create your first sticky note to start the bulletin board.</p>
-          </div>
+      <section id="boardPanel">
+        <section class="control-row">
+          <label class="control search-control">
+            <span>Search</span>
+            <input
+              id="searchInput"
+              type="search"
+              placeholder="Search notes, updates, action items..."
+            />
+          </label>
+          <label class="control">
+            <span>Filter</span>
+            <select id="filterSelect">
+              <option value="all">All notes</option>
+              <option value="pinned">Pinned first</option>
+              <option value="recent">Recently updated</option>
+            </select>
+          </label>
+          <button id="seedDemoButton" class="btn btn-subtle" type="button">
+            Load demo notes
+          </button>
+          <button id="clearBoardButton" class="btn btn-danger-subtle" type="button">
+            Clear board
+          </button>
         </section>
 
-        <aside class="editor-column">
-          <div id="editorEmptyState" class="editor-empty">
-            <h2>Select a sticky note</h2>
-            <p>
-              Pick a note to edit it, add bullets, or create numbered lists like
-              Gmail.
-            </p>
-          </div>
+        <div id="boardStats" class="board-stats"></div>
 
-          <section id="editorPanel" class="editor-panel hidden">
-            <label class="control">
-              <span>Title</span>
-              <input
-                id="noteTitleInput"
-                type="text"
-                maxlength="120"
-                placeholder="Note title"
-              />
-            </label>
+        <main class="content-grid">
+          <section class="notes-column">
+            <div id="notesGrid" class="notes-grid"></div>
+            <div id="notesEmptyState" class="empty-state hidden">
+              <h2>No notes found</h2>
+              <p>Create your first sticky note to start the bulletin board.</p>
+            </div>
+          </section>
 
-            <div>
-              <p class="tiny-label">Sticky color</p>
-              <div id="colorPicker" class="color-picker"></div>
+          <aside class="editor-column">
+            <div id="editorEmptyState" class="editor-empty">
+              <h2>Select a sticky note</h2>
+              <p>
+                Pick a note to edit it, add bullets, or create numbered lists like
+                Gmail.
+              </p>
             </div>
 
-            <div class="rich-toolbar" aria-label="Formatting toolbar">
-              <button class="format-button" data-command="bold" type="button">
-                <strong>B</strong>
-              </button>
-              <button class="format-button" data-command="italic" type="button">
-                <em>I</em>
-              </button>
-              <button class="format-button" data-command="underline" type="button">
-                <u>U</u>
-              </button>
-              <div class="toolbar-divider"></div>
-              <button
-                class="format-button"
-                data-command="insertUnorderedList"
-                type="button"
-              >
-                • List
-              </button>
-              <button
-                class="format-button"
-                data-command="insertOrderedList"
-                type="button"
-              >
-                1. List
-              </button>
-              <button class="format-button" data-command="removeFormat" type="button">
-                Clear
-              </button>
-            </div>
+            <section id="editorPanel" class="editor-panel hidden">
+              <label class="control">
+                <span>Title</span>
+                <input
+                  id="noteTitleInput"
+                  type="text"
+                  maxlength="120"
+                  placeholder="Note title"
+                />
+              </label>
 
-            <div
-              id="noteBodyInput"
-              class="note-body-input"
-              contenteditable="true"
-              data-placeholder="Write announcements, updates, and action items..."
-            ></div>
+              <div>
+                <p class="tiny-label">Sticky color</p>
+                <div id="colorPicker" class="color-picker"></div>
+              </div>
 
-            <footer class="editor-footer">
-              <p id="saveState" class="save-state">Saved</p>
-              <div class="footer-actions">
-                <button id="pinNoteButton" class="btn btn-subtle" type="button">
-                  Pin
+              <div class="rich-toolbar" aria-label="Formatting toolbar">
+                <button class="format-button" data-command="bold" type="button">
+                  <strong>B</strong>
                 </button>
-                <button id="deleteNoteButton" class="btn btn-danger-subtle" type="button">
-                  Delete
+                <button class="format-button" data-command="italic" type="button">
+                  <em>I</em>
+                </button>
+                <button class="format-button" data-command="underline" type="button">
+                  <u>U</u>
+                </button>
+                <div class="toolbar-divider"></div>
+                <button
+                  class="format-button"
+                  data-command="insertUnorderedList"
+                  type="button"
+                >
+                  • List
+                </button>
+                <button
+                  class="format-button"
+                  data-command="insertOrderedList"
+                  type="button"
+                >
+                  1. List
+                </button>
+                <button class="format-button" data-command="removeFormat" type="button">
+                  Clear
                 </button>
               </div>
-            </footer>
-          </section>
-        </aside>
-      </main>
+
+              <div
+                id="noteBodyInput"
+                class="note-body-input"
+                contenteditable="true"
+                data-placeholder="Write announcements, updates, and action items..."
+              ></div>
+
+              <footer class="editor-footer">
+                <p id="saveState" class="save-state">Saved</p>
+                <div class="footer-actions">
+                  <button id="pinNoteButton" class="btn btn-subtle" type="button">
+                    Pin
+                  </button>
+                  <button id="deleteNoteButton" class="btn btn-danger-subtle" type="button">
+                    Delete
+                  </button>
+                </div>
+              </footer>
+            </section>
+          </aside>
+        </main>
+      </section>
+
+      <section id="logsPanel" class="hidden">
+        <section class="log-subtabs" aria-label="Log sub tabs">
+          <button id="logsSubTabActivity" class="log-subtab active" type="button">
+            Activity logs
+          </button>
+          <button id="logsSubTabErrors" class="log-subtab" type="button">
+            Error logs
+            <span id="errorLogsBadge" class="mini-badge hidden"></span>
+          </button>
+        </section>
+
+        <section class="log-controls">
+          <label class="control">
+            <span>Search logs</span>
+            <input
+              id="logsSearchInput"
+              type="search"
+              placeholder="Search title, message, source, code..."
+            />
+          </label>
+          <label class="control">
+            <span>Severity</span>
+            <select id="logsSeverityFilter">
+              <option value="all">All</option>
+              <option value="error">Error</option>
+              <option value="warn">Warn</option>
+              <option value="info">Info</option>
+            </select>
+          </label>
+          <label class="control">
+            <span>Status</span>
+            <select id="logsStatusFilter">
+              <option value="all">All</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </label>
+          <button id="refreshLogsButton" class="btn btn-subtle" type="button">
+            Refresh logs
+          </button>
+          <button id="clearLogsButton" class="btn btn-danger-subtle" type="button">
+            Clear shown logs
+          </button>
+        </section>
+
+        <div id="logsSummary" class="board-stats"></div>
+        <div id="logsStatusLine" class="board-stats"></div>
+
+        <section id="activityLogsList" class="log-list"></section>
+        <section id="errorLogsList" class="log-list hidden"></section>
+        <div id="logsEmptyState" class="empty-state hidden">
+          <h2>No logs found</h2>
+          <p>No entries match your current filters.</p>
+        </div>
+      </section>
     </div>
 
     <!-- Rocketlane injects the SDK URL during build. -->

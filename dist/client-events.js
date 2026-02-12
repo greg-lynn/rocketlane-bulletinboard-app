@@ -224,7 +224,7 @@
           steps: [
             "Refresh Rocketlane and wait for client events to reinitialize.",
             "Confirm app server actions are deployed from the latest ZIP.",
-            "If repeated, open Bulletin Board Error Logs for full diagnostics.",
+            "If repeated, open Logs > Error Logs for full diagnostics.",
           ],
         },
       },

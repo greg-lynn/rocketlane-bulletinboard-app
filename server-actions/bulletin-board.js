@@ -1,6 +1,7 @@
 const BOARD_KEY = "bb_board_v1";
 const LAST_SEEN_PREFIX = "bb_last_seen_v1:";
 const { appendErrorLog } = require("./error-logs");
+const { appendActivityLog } = require("./activity-logs");
 
 function nowIso() {
   return new Date().toISOString();
@@ -158,7 +159,8 @@ async function bbUpsertNote(r, args) {
   const nextNote = normalizeIncomingNote(incoming, author);
 
   const existingIdx = board.notes.findIndex((n) => n && String(n.id) === String(nextNote.id));
-  if (existingIdx >= 0) {
+  const isUpdate = existingIdx >= 0;
+  if (isUpdate) {
     // Keep original createdAt if it existed.
     const existing = board.notes[existingIdx];
     nextNote.createdAt = coerceString(existing && existing.createdAt) || nextNote.createdAt;
@@ -172,6 +174,25 @@ async function bbUpsertNote(r, args) {
   // Author just posted/updated; mark as read for them so they don't see their own post as unread.
   await setLastSeen(r, author.id, saved.updatedAt);
 
+  try {
+    await appendActivityLog(r, args, {
+      type: isUpdate ? "note_updated" : "note_created",
+      title: isUpdate ? "Note updated" : "Note created",
+      message: isUpdate
+        ? `Updated note "${nextNote.title}".`
+        : `Created note "${nextNote.title}".`,
+      details: `Note ID: ${nextNote.id}`,
+      severity: "info",
+      meta: {
+        noteId: nextNote.id,
+        noteTitle: nextNote.title,
+        action: isUpdate ? "update" : "create",
+      },
+    });
+  } catch (_error) {
+    // Activity logs should never block note operations.
+  }
+
   return buildResponse(r, args, saved);
 }
 
@@ -179,15 +200,51 @@ async function bbDeleteNote(r, args) {
   const payload = args && args.payload ? args.payload : {};
   const noteId = coerceString(payload.noteId);
   const board = await getBoard(r);
+  const deletedNote = board.notes.find((n) => n && String(n.id) === String(noteId));
   board.notes = board.notes.filter((n) => n && String(n.id) !== String(noteId));
   const saved = await setBoard(r, board);
+
+  try {
+    await appendActivityLog(r, args, {
+      type: "note_deleted",
+      title: "Note deleted",
+      message: `Deleted note "${coerceString(deletedNote && deletedNote.title) || noteId}".`,
+      details: `Note ID: ${noteId}`,
+      severity: "warn",
+      meta: {
+        noteId,
+        noteTitle: coerceString(deletedNote && deletedNote.title),
+        action: "delete",
+      },
+    });
+  } catch (_error) {
+    // ignore activity logging errors
+  }
+
   return buildResponse(r, args, saved);
 }
 
 async function bbClearNotes(r, args) {
   const board = await getBoard(r);
+  const clearedCount = board.notes.length;
   board.notes = [];
   const saved = await setBoard(r, board);
+
+  try {
+    await appendActivityLog(r, args, {
+      type: "board_cleared",
+      title: "Board cleared",
+      message: `Cleared ${clearedCount} note(s) from the bulletin board.`,
+      details: "All notes were removed via clear action.",
+      severity: "warn",
+      meta: {
+        clearedCount,
+      },
+    });
+  } catch (_error) {
+    // ignore activity logging errors
+  }
+
   return buildResponse(r, args, saved);
 }
 

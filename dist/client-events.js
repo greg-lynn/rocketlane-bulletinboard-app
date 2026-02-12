@@ -4,13 +4,23 @@
   const POLL_INTERVAL_MS = 30000;
   const MAX_BADGE = 99;
   const BADGE_ID = "rl-bb-unread-badge";
+  const ERROR_LOG_THROTTLE_MS = 60000;
 
   let client = null;
   let lastUnreadCount = null;
+  let lastErrorLogAt = 0;
 
   init().catch((error) => {
     // Client events should never hard-fail the host page.
     console.warn("[bb client-events] init failed", error);
+    logClientEventError({
+      code: "CLIENT_EVENTS_INIT_FAILED",
+      title: "Client events initialization failed",
+      message: (error && error.message) || "Client events failed to initialize.",
+      stack: error && error.stack ? String(error.stack) : "",
+      details:
+        "Unread-count polling and nav badge updates could not be initialized.",
+    }).catch(() => {});
   });
 
   async function init() {
@@ -85,7 +95,17 @@
           : resp;
       const count = Number((data && data.unreadCount) || 0);
       return Number.isFinite(count) ? Math.max(0, count) : 0;
-    } catch (_error) {
+    } catch (error) {
+      logClientEventError({
+        code: "CLIENT_EVENTS_POLL_FAILED",
+        title: "Unread poll failed",
+        message:
+          (error && error.message) ||
+          "Failed to poll unread count for bulletin board posts.",
+        stack: error && error.stack ? String(error.stack) : "",
+        details:
+          "The notification poll loop could not fetch unread updates from server actions.",
+      }).catch(() => {});
       return null;
     }
   }
@@ -173,6 +193,42 @@
           .includes("bulletin board")
       ) || null
     );
+  }
+
+  async function logClientEventError(input) {
+    const now = Date.now();
+    if (now - lastErrorLogAt < ERROR_LOG_THROTTLE_MS) {
+      return;
+    }
+    lastErrorLogAt = now;
+
+    if (!client || !client.data || typeof client.data.invoke !== "function") {
+      return;
+    }
+
+    const payload = input && typeof input === "object" ? input : {};
+    await client.data.invoke("bb_logError", {
+      log: {
+        source: "bulletin-board-client-events",
+        code: payload.code || "CLIENT_EVENTS_ERROR",
+        severity: "warn",
+        title: payload.title || "Bulletin board client events warning",
+        message:
+          payload.message ||
+          "A client-events error occurred while tracking unread notifications.",
+        details: payload.details || "",
+        stack: payload.stack || "",
+        fix: {
+          summary:
+            "Notification polling hit a transient issue. Refresh Rocketlane and verify server actions are available.",
+          steps: [
+            "Refresh Rocketlane and wait for client events to reinitialize.",
+            "Confirm app server actions are deployed from the latest ZIP.",
+            "If repeated, open Bulletin Board Error Logs for full diagnostics.",
+          ],
+        },
+      },
+    });
   }
 })();
 

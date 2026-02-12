@@ -4,7 +4,7 @@
   "private": true,
   "description": "Sticky Notes-inspired Rocketlane custom app for customer bulletin boards.",
   "scripts": {
-    "check:js": "node --check dist/app.js && node --check index.js",
+    "check:js": "node --check dist/app.js && node --check dist/error-logs.js && node --check dist/client-events.js && node --check index.js && node --check server-actions/bulletin-board.js && node --check server-actions/error-logs.js",
     "package:zip": "bash scripts/package-app.sh",
     "package:rli": "bash scripts/package-app-rli.sh",
     "screenshots": "node scripts/capture-screenshots.mjs"

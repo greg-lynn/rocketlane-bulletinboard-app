@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bulletin Board Error Logs</title>
+    <link rel="stylesheet" href="./error-logs.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="header">
+        <div>
+          <h1>Bulletin Board Error Logs</h1>
+          <p class="subtext">
+            Track errors across the bulletin board app and view how to fix each issue.
+          </p>
+        </div>
+      </header>
+
+      <section class="controls">
+        <label class="control">
+          <span>Search</span>
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="Search by title, message, code, source..."
+          />
+        </label>
+        <label class="control">
+          <span>Severity</span>
+          <select id="severityFilter">
+            <option value="all">All</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+          </select>
+        </label>
+        <label class="control">
+          <span>Status</span>
+          <select id="statusFilter">
+            <option value="all">All</option>
+            <option value="open">Open only</option>
+            <option value="resolved">Resolved only</option>
+          </select>
+        </label>
+        <button id="refreshBtn" class="btn btn-subtle" type="button">Refresh</button>
+        <button id="clearBtn" class="btn btn-danger" type="button">Clear logs</button>
+      </section>
+
+      <section id="summary" class="summary"></section>
+      <p id="statusLine" class="status-line">Loading logs…</p>
+
+      <section id="logs" class="logs"></section>
+      <section id="empty" class="empty" hidden>
+        <h3>No matching logs</h3>
+        <p>Errors will appear here as the bulletin board app runs.</p>
+      </section>
+    </div>
+
+    <script src="<%= rocketlaneSdk %>" id="rocketlane-sdk"></script>
+    <script src="./error-logs.js"></script>
+  </body>
+</html>

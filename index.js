@@ -20,6 +20,17 @@ const widgets = [
       html: "dist/index.html",
     },
   },
+  {
+    identifier: "customer-bulletin-board-error-logs",
+    location: ["left_nav"],
+    name: "Bulletin Board Error Logs",
+    description:
+      "Detailed error logs for bulletin board failures, including fix guidance.",
+    icon: "dist/error-icon.svg",
+    entrypoint: {
+      html: "dist/error-logs.html",
+    },
+  },
 ];
 
 const {
@@ -30,6 +41,13 @@ const {
   bbGetUnreadCount,
   bbMarkRead,
 } = require("./server-actions/bulletin-board");
+
+const {
+  bbLogError,
+  bbListErrors,
+  bbClearErrorLogs,
+  bbMarkErrorResolved,
+} = require("./server-actions/error-logs");
 
 const serverActions = [
   {
@@ -62,10 +80,30 @@ const serverActions = [
     description: "Mark bulletin board posts as read for the current user.",
     run: bbMarkRead,
   },
+  {
+    name: "bb_logError",
+    description: "Log a bulletin board error with fix guidance.",
+    run: bbLogError,
+  },
+  {
+    name: "bb_listErrors",
+    description: "List bulletin board error logs.",
+    run: bbListErrors,
+  },
+  {
+    name: "bb_clearErrorLogs",
+    description: "Clear all bulletin board error logs.",
+    run: bbClearErrorLogs,
+  },
+  {
+    name: "bb_markErrorResolved",
+    description: "Mark an error log entry as resolved.",
+    run: bbMarkErrorResolved,
+  },
 ];
 
 module.exports = {
-  version: "1.1.0",
+  version: "1.2.0",
   widgets,
   serverActions,
   clientEvents: "dist/client-events.js",

@@ -9,6 +9,8 @@
     { id: "pink", label: "Rose", hex: "#ffd7ea" },
     { id: "purple", label: "Lavender", hex: "#ecd8ff" },
   ];
+  const LOCAL_ERROR_LOG_KEY = "bb_local_error_logs_v1";
+  const MAX_LOCAL_ERRORS = 80;
 
   const state = {
     client: null,
@@ -18,6 +20,7 @@
     layoutMode: "full", // "full" | "sidebar"
     persistence: "local", // "local" | "server"
     unreadCount: 0,
+    errorCount: 0,
     notes: [],
     selectedNoteId: null,
     searchQuery: "",
@@ -33,6 +36,17 @@
       if (refs.connectionBadge) {
         refs.connectionBadge.textContent = "Initialization failed";
       }
+      reportClientError({
+        code: "APP_INIT_FAILED",
+        source: "bulletin-board-ui",
+        title: "Bulletin board initialization failed",
+        message:
+          (error && error.message) ||
+          "The app failed during startup initialization.",
+        stack: error && error.stack ? String(error.stack) : "",
+        details:
+          "Initialization did not complete. This can happen if SDK context fails or required resources are unavailable.",
+      }).catch(() => {});
     });
   });
 
@@ -52,6 +66,7 @@
     state.storageKey = createStorageKey(runtime.context);
 
     updateHeader(runtime);
+    installGlobalErrorHandlers();
     state.persistence = determinePersistenceMode(state.client);
     await loadNotes();
 
@@ -390,6 +405,173 @@
     );
   }
 
+  function buildClientFixGuidance(code, message) {
+    const normalizedCode = String(code || "").toUpperCase();
+    const normalizedMessage = String(message || "").toLowerCase();
+
+    if (
+      normalizedCode.includes("SDK") ||
+      normalizedCode.includes("INIT") ||
+      normalizedMessage.includes("sdk")
+    ) {
+      return {
+        summary:
+          "Reload Rocketlane and open the app from inside Rocketlane (not as a standalone local file).",
+        steps: [
+          "Refresh the Rocketlane page.",
+          "If this keeps happening, re-upload the latest app ZIP.",
+          "Check the Error Logs app for technical context.",
+        ],
+      };
+    }
+
+    if (
+      normalizedCode.includes("NETWORK") ||
+      normalizedMessage.includes("network") ||
+      normalizedMessage.includes("timeout")
+    ) {
+      return {
+        summary:
+          "Check connectivity and retry. This is usually a temporary network issue.",
+        steps: [
+          "Confirm internet access.",
+          "Retry the same action.",
+          "If repeated, verify firewall/proxy allows Rocketlane app requests.",
+        ],
+      };
+    }
+
+    if (
+      normalizedCode.includes("KV") ||
+      normalizedCode.includes("SERVER_ACTION") ||
+      normalizedCode.includes("ACTION")
+    ) {
+      return {
+        summary:
+          "A backend app action failed. Re-upload the latest app package and try again.",
+        steps: [
+          "Run `npm run package:rli` and upload the new ZIP.",
+          "Refresh Rocketlane and retry.",
+          "Use Bulletin Board Error Logs to inspect detailed failure metadata.",
+        ],
+      };
+    }
+
+    return {
+      summary:
+        "Refresh Rocketlane and retry. If it repeats, review this error in the Error Logs app.",
+      steps: [
+        "Refresh the page.",
+        "Retry the action.",
+        "Open Bulletin Board Error Logs for detailed fix guidance.",
+      ],
+    };
+  }
+
+  function setUserFacingError(message, fixSummary) {
+    if (!refs.saveState) {
+      return;
+    }
+    const friendly = String(message || "An error occurred.");
+    const fix = String(fixSummary || "").trim();
+    refs.saveState.textContent = fix
+      ? `Error: ${friendly} Fix: ${fix}`
+      : `Error: ${friendly}`;
+  }
+
+  function writeLocalErrorFallback(record) {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_ERROR_LOG_KEY);
+      const existing = raw ? JSON.parse(raw) : [];
+      const next = [record, ...(Array.isArray(existing) ? existing : [])].slice(
+        0,
+        MAX_LOCAL_ERRORS
+      );
+      window.localStorage.setItem(LOCAL_ERROR_LOG_KEY, JSON.stringify(next));
+      state.errorCount = next.length;
+    } catch (_error) {
+      // ignore local fallback write issues
+    }
+  }
+
+  async function reportClientError(input) {
+    const payload = input && typeof input === "object" ? input : {};
+    const guidance = payload.fix || buildClientFixGuidance(payload.code, payload.message);
+    const record = {
+      source: payload.source || "bulletin-board-ui",
+      code: payload.code || "CLIENT_RUNTIME_ERROR",
+      severity: payload.severity || "error",
+      title: payload.title || "Bulletin Board client error",
+      message:
+        payload.message ||
+        "An unexpected issue occurred in the bulletin board interface.",
+      details: payload.details || "",
+      stack: payload.stack || "",
+      fix: guidance,
+      widgetId: state.widgetId || "",
+      url: window.location.href,
+      meta: payload.meta || {},
+    };
+
+    setUserFacingError(record.message, guidance.summary);
+
+    if (
+      canInvokeServerActions(state.client) &&
+      state.client &&
+      state.client.data &&
+      typeof state.client.data.invoke === "function"
+    ) {
+      try {
+        await state.client.data.invoke("bb_logError", { log: record });
+        return;
+      } catch (_error2) {
+        // continue to local fallback
+      }
+    }
+
+    writeLocalErrorFallback({
+      ...record,
+      createdAt: new Date().toISOString(),
+      context: state.context || {},
+    });
+  }
+
+  function installGlobalErrorHandlers() {
+    if (state._errorHandlersInstalled) {
+      return;
+    }
+    state._errorHandlersInstalled = true;
+
+    window.addEventListener("error", (event) => {
+      reportClientError({
+        code: "WINDOW_ERROR",
+        source: "bulletin-board-ui",
+        title: "Unhandled runtime error",
+        message: event && event.message ? event.message : "Unhandled runtime error",
+        stack: event && event.error && event.error.stack ? event.error.stack : "",
+        details:
+          "A browser runtime exception was thrown while rendering or interacting with the app.",
+      }).catch(() => {});
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      const reason = event ? event.reason : null;
+      const message =
+        (reason && reason.message) ||
+        (typeof reason === "string" ? reason : "Unhandled promise rejection");
+      const stack = reason && reason.stack ? String(reason.stack) : "";
+      reportClientError({
+        code: "UNHANDLED_PROMISE_REJECTION",
+        source: "bulletin-board-ui",
+        title: "Unhandled async error",
+        message,
+        stack,
+        details:
+          "An asynchronous operation rejected without being handled in the app code path.",
+      }).catch(() => {});
+    });
+  }
+
   async function invokeAction(name, payload) {
     if (!canInvokeServerActions(state.client)) {
       return null;
@@ -403,6 +585,20 @@
         : resp;
     } catch (error) {
       console.warn("Server action failed:", name, error);
+      if (name !== "bb_logError") {
+        await reportClientError({
+          code: "SERVER_ACTION_INVOKE_FAILED",
+          source: "bulletin-board-ui",
+          title: `Server action failed: ${name}`,
+          message:
+            (error && error.message) ||
+            "A server action failed to execute in Rocketlane.",
+          stack: error && error.stack ? String(error.stack) : "",
+          details:
+            `Action "${name}" failed while handling a bulletin board request.`,
+          meta: { actionName: name, payload: payload || {} },
+        });
+      }
       return null;
     }
   }
@@ -454,6 +650,16 @@
     } catch (error) {
       console.warn("Unable to parse saved notes", error);
       state.notes = [];
+      await reportClientError({
+        code: "LOCAL_PARSE_FAILED",
+        source: "bulletin-board-ui",
+        title: "Local cache parse failed",
+        message:
+          "Saved bulletin board data could not be parsed from local cache.",
+        stack: error && error.stack ? String(error.stack) : "",
+        details:
+          "The local browser cache for bulletin board notes appears corrupted.",
+      });
     }
   }
 
@@ -470,8 +676,13 @@
         renderUnreadBadge();
         renderNotesGrid();
         renderStats();
+        setSaveState("Saved " + formatTime(new Date().toISOString()));
+        return;
       }
-      setSaveState("Saved " + formatTime(new Date().toISOString()));
+      setUserFacingError(
+        "Unable to save the note right now.",
+        "Retry in a few seconds. If it persists, check Bulletin Board Error Logs."
+      );
       return;
     }
 
@@ -682,7 +893,7 @@
     document.execCommand("insertText", false, text);
   }
 
-  function onTogglePinFromEditor() {
+  async function onTogglePinFromEditor() {
     const note = getSelectedNote();
     if (!note) {
       return;
@@ -690,7 +901,7 @@
 
     note.pinned = !note.pinned;
     note.updatedAt = new Date().toISOString();
-    persistNotes();
+    await persistNotes();
     renderAll();
   }
 
@@ -728,7 +939,7 @@
     renderAll();
   }
 
-  function onColorSwatchClick(event) {
+  async function onColorSwatchClick(event) {
     const button = event.target.closest(".color-swatch");
     if (!button) {
       return;
@@ -742,7 +953,7 @@
 
     note.color = nextColor;
     note.updatedAt = new Date().toISOString();
-    persistNotes();
+    await persistNotes();
     renderAll();
   }
 

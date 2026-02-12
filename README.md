@@ -21,6 +21,11 @@ This app is designed to follow Rocketlane Marketplace extension patterns and can
   - Initializes through `window.rliSdk.init({})` when available
   - Reads contextual data from Rocketlane (`account`, `user`, `project`) when available
   - Falls back to local preview mode when run outside Rocketlane
+- Built-in **error observability app**:
+  - Dedicated widget: **Bulletin Board Error Logs**
+  - Logs frontend, client-events, and backend action failures
+  - Provides detailed **How to fix** guidance for each error entry
+  - Supports resolving and clearing errors in-app
 
 ## Rocketlane docs used as implementation reference
 
@@ -62,7 +67,10 @@ Reference page used while designing:
 - `dist/app.js` — app logic and Rocketlane runtime integration
 - `dist/client-events.js` — client events (unread badge/toast notifications)
 - `dist/icon.svg` — app icon
+- `dist/error-logs.html` / `dist/error-logs.css` / `dist/error-logs.js` — error logs viewer widget
+- `dist/error-icon.svg` — error logs widget icon
 - `server-actions/bulletin-board.js` — server actions using Rocketlane KV store
+- `server-actions/error-logs.js` — shared error logging + fix guidance server actions
 
 ## Add this app to Rocketlane
 
@@ -73,6 +81,7 @@ Because **Home (H)** is not exposed as a supported placeholder, this app ships w
 
 - **Bulletin Board (Full)** (`left_nav`)
 - **Bulletin Board (Home sidebar)** (`customer_portal_widget`) — compact layout intended for right-rail style embeds
+- **Bulletin Board Error Logs** (`left_nav`) — dedicated error monitoring + fix guidance
 - A **notification mechanism** (client events) that shows unread-count badges/toasts when new posts are added.
 
 To install:

@@ -1,5 +1,6 @@
 const BOARD_KEY = "bb_board_v1";
 const LAST_SEEN_PREFIX = "bb_last_seen_v1:";
+const { appendErrorLog } = require("./error-logs");
 
 function nowIso() {
   return new Date().toISOString();
@@ -215,12 +216,48 @@ async function bbMarkRead(r, args) {
   };
 }
 
+function withErrorLogging(actionName, fn) {
+  return async (r, args) => {
+    try {
+      return await fn(r, args);
+    } catch (error) {
+      try {
+        await appendErrorLog(r, args, {
+          source: "bulletin-board-server",
+          code: `${String(actionName).toUpperCase()}_FAILED`,
+          severity: "error",
+          title: `${actionName} failed`,
+          message:
+            (error && error.message) ||
+            "A server-side bulletin board action failed unexpectedly.",
+          details:
+            "Server action execution failed while processing bulletin board data.",
+          stack: error && error.stack ? String(error.stack) : "",
+          fix: {
+            summary:
+              "The bulletin board backend could not complete this request.",
+            steps: [
+              "Refresh Rocketlane and retry the same action.",
+              "Confirm the latest app ZIP is installed (frontend + server actions).",
+              "Open 'Bulletin Board Error Logs' for details and resolution guidance.",
+            ],
+          },
+        });
+      } catch (_logError) {
+        // Never mask the original failure because logging failed.
+      }
+
+      throw error;
+    }
+  };
+}
+
 module.exports = {
-  bbListNotes,
-  bbUpsertNote,
-  bbDeleteNote,
-  bbClearNotes,
-  bbGetUnreadCount,
-  bbMarkRead,
+  bbListNotes: withErrorLogging("bb_listNotes", bbListNotes),
+  bbUpsertNote: withErrorLogging("bb_upsertNote", bbUpsertNote),
+  bbDeleteNote: withErrorLogging("bb_deleteNote", bbDeleteNote),
+  bbClearNotes: withErrorLogging("bb_clearNotes", bbClearNotes),
+  bbGetUnreadCount: withErrorLogging("bb_getUnreadCount", bbGetUnreadCount),
+  bbMarkRead: withErrorLogging("bb_markRead", bbMarkRead),
 };
 

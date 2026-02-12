@@ -406,6 +406,22 @@ select:focus,
   margin: 0 0 0.65rem;
 }
 
+/* Rocketlane host styles can reset list styles globally, so force them here. */
+.note-body-input ul {
+  list-style-type: disc;
+  padding-left: 1.3rem;
+}
+
+.note-body-input ol {
+  list-style-type: decimal;
+  padding-left: 1.35rem;
+}
+
+.note-body-input li {
+  display: list-item;
+  margin: 0.2rem 0;
+}
+
 .editor-footer {
   display: flex;
   justify-content: space-between;

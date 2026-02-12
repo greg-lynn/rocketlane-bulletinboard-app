@@ -959,12 +959,71 @@
 
   function executeFormattingCommand(command) {
     refs.noteBodyInput.focus();
-    const worked = document.execCommand(command, false, null);
+    let worked = false;
+    try {
+      worked = document.execCommand(command, false, null);
+    } catch (_error) {
+      worked = false;
+    }
+
+    // Fallback: some embedded environments disable list execCommand behavior.
+    if (
+      worked === false &&
+      (command === "insertUnorderedList" || command === "insertOrderedList")
+    ) {
+      const listType = command === "insertUnorderedList" ? "ul" : "ol";
+      worked = insertListFallback(listType);
+    }
+
     if (worked === false) {
-      setSaveState("Formatting command not supported in this browser");
+      setSaveState(
+        "Formatting command not supported in this context. Try reloading the app."
+      );
+      reportClientError({
+        code: "LIST_FORMAT_COMMAND_FAILED",
+        source: "bulletin-board-ui",
+        title: "List formatting command failed",
+        message:
+          "The editor could not apply list formatting in the current embed context.",
+        details:
+          `Command "${command}" returned false and fallback handling did not succeed.`,
+      }).catch(() => {});
       return;
     }
     refs.noteBodyInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function insertListFallback(listType) {
+    try {
+      const editor = refs.noteBodyInput;
+      const selection = window.getSelection();
+      const list = document.createElement(listType);
+      const li = document.createElement("li");
+      li.textContent = "List item";
+      list.appendChild(li);
+
+      if (!selection || selection.rangeCount === 0) {
+        editor.appendChild(list);
+      } else {
+        const range = selection.getRangeAt(0);
+        // Ensure insertion happens inside the editor area.
+        if (!editor.contains(range.commonAncestorContainer)) {
+          editor.appendChild(list);
+        } else {
+          range.deleteContents();
+          range.insertNode(list);
+        }
+      }
+
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(li);
+      nextRange.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(nextRange);
+      return true;
+    } catch (_error) {
+      return false;
+    }
   }
 
   function renderAll() {

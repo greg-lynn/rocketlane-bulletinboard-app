@@ -93,6 +93,7 @@
     await refreshLogsData();
     renderAll();
     scheduleReadTracking();
+    scheduleUnreadPolling();
     scheduleLogsPolling();
   }
 
@@ -478,7 +479,7 @@
     }
 
     if (refs.featureBadge) {
-      refs.featureBadge.textContent = "Logs + lists v1.4.2";
+      refs.featureBadge.textContent = "Logs + lists v1.4.3";
     }
   }
 
@@ -845,6 +846,40 @@
       renderUnreadBadge();
       renderStats();
     }
+  }
+
+  function scheduleUnreadPolling() {
+    if (state.persistence !== "server") {
+      return;
+    }
+    if (state._unreadPollingInstalled) {
+      return;
+    }
+    state._unreadPollingInstalled = true;
+
+    const poll = () => {
+      refreshUnreadCount().catch(() => {});
+    };
+
+    window.setInterval(poll, 20000);
+    window.addEventListener("focus", poll);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        poll();
+      }
+    });
+  }
+
+  async function refreshUnreadCount() {
+    if (state.persistence !== "server") {
+      return;
+    }
+    const data = await invokeAction("bb_getUnreadCount", {});
+    if (!data) {
+      return;
+    }
+    applyNotesResponse(data);
+    renderUnreadBadge();
   }
 
   function scheduleLogsPolling() {

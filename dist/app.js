@@ -478,7 +478,7 @@
     }
 
     if (refs.featureBadge) {
-      refs.featureBadge.textContent = "Logs + lists v1.4";
+      refs.featureBadge.textContent = "Logs + lists v1.4.2";
     }
   }
 
@@ -1725,9 +1725,14 @@
         header.appendChild(pin);
       }
 
-      const preview = document.createElement("p");
+      const preview = document.createElement("div");
       preview.className = "note-preview";
-      preview.textContent = summarize(note.content, 170);
+      const previewHtml = createNotePreviewHtml(note.content);
+      if (previewHtml) {
+        preview.innerHTML = previewHtml;
+      } else {
+        preview.textContent = "No content yet.";
+      }
 
       const meta = document.createElement("p");
       meta.className = "note-meta";
@@ -1903,6 +1908,30 @@
     });
 
     return chunks.join(" ");
+  }
+
+  function createNotePreviewHtml(html) {
+    const container = document.createElement("div");
+    container.innerHTML = String(html || "");
+
+    // Remove active/embedded elements and event-handler attributes so the
+    // sticky note preview remains inert even if malformed HTML sneaks in.
+    container
+      .querySelectorAll(
+        "script,style,iframe,object,embed,form,button,input,textarea,select,link,meta"
+      )
+      .forEach((node) => node.remove());
+
+    container.querySelectorAll("*").forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        const name = String(attr && attr.name ? attr.name : "").toLowerCase();
+        if (name.startsWith("on") || name === "srcdoc") {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+
+    return String(container.innerHTML || "").trim();
   }
 
   function stripHtml(html) {

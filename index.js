@@ -113,7 +113,7 @@ const serverActions = [
 ];
 
 module.exports = {
-  version: "1.4.3",
+  version: "1.4.4",
   widgets,
   serverActions,
   clientEvents: "dist/client-events.js",

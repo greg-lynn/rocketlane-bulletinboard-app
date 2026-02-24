@@ -11,6 +11,7 @@
   ];
   const LOCAL_ERROR_LOG_KEY = "bb_local_error_logs_v1";
   const MAX_LOCAL_ERRORS = 80;
+  const MAX_PREVIEW_LIST_ITEMS = 8;
 
   const state = {
     client: null,
@@ -479,7 +480,7 @@
     }
 
     if (refs.featureBadge) {
-      refs.featureBadge.textContent = "Logs + lists v1.4.3";
+      refs.featureBadge.textContent = "Logs + lists v1.4.4";
     }
   }
 
@@ -1762,10 +1763,8 @@
 
       const preview = document.createElement("div");
       preview.className = "note-preview";
-      const previewHtml = createNotePreviewHtml(note.content);
-      if (previewHtml) {
-        preview.innerHTML = previewHtml;
-      } else {
+      const hasPreviewContent = renderNotePreviewContent(preview, note.content);
+      if (!hasPreviewContent) {
         preview.textContent = "No content yet.";
       }
 
@@ -1945,12 +1944,82 @@
     return chunks.join(" ");
   }
 
-  function createNotePreviewHtml(html) {
+  function renderNotePreviewContent(target, html) {
+    if (!target) {
+      return false;
+    }
+    target.innerHTML = "";
+
+    const source = createSanitizedPreviewContainer(html);
+    const fragment = document.createDocumentFragment();
+    let hasContent = false;
+
+    source.childNodes.forEach((node) => {
+      if (!node) {
+        return;
+      }
+
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = String(node.textContent || "").trim();
+        if (text) {
+          appendPreviewParagraph(fragment, text);
+          hasContent = true;
+        }
+        return;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+
+      const tag = node.tagName ? node.tagName.toLowerCase() : "";
+      if (tag === "ul" || tag === "ol") {
+        const appended = appendPreviewList(fragment, node, tag === "ol");
+        hasContent = hasContent || appended;
+        return;
+      }
+
+      if (tag === "br") {
+        return;
+      }
+
+      const element = node;
+      const text = extractElementTextWithoutLists(element);
+      if (text) {
+        appendPreviewParagraph(fragment, text);
+        hasContent = true;
+      }
+
+      const directLists = Array.from(element.children).filter((child) => {
+        const childTag = child && child.tagName ? child.tagName.toLowerCase() : "";
+        return childTag === "ul" || childTag === "ol";
+      });
+      directLists.forEach((listNode) => {
+        const listTag = listNode.tagName ? listNode.tagName.toLowerCase() : "ul";
+        const appended = appendPreviewList(fragment, listNode, listTag === "ol");
+        hasContent = hasContent || appended;
+      });
+    });
+
+    if (!hasContent) {
+      const fallbackText = String(source.textContent || "").trim();
+      if (fallbackText) {
+        appendPreviewParagraph(fragment, fallbackText);
+        hasContent = true;
+      }
+    }
+
+    if (hasContent) {
+      target.appendChild(fragment);
+    }
+    return hasContent;
+  }
+
+  function createSanitizedPreviewContainer(html) {
     const container = document.createElement("div");
     container.innerHTML = String(html || "");
 
-    // Remove active/embedded elements and event-handler attributes so the
-    // sticky note preview remains inert even if malformed HTML sneaks in.
+    // Keep preview inert regardless of source content.
     container
       .querySelectorAll(
         "script,style,iframe,object,embed,form,button,input,textarea,select,link,meta"
@@ -1966,7 +2035,59 @@
       });
     });
 
-    return String(container.innerHTML || "").trim();
+    return container;
+  }
+
+  function appendPreviewParagraph(fragment, text) {
+    const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+    if (!cleaned) {
+      return false;
+    }
+    const p = document.createElement("p");
+    p.textContent = cleaned;
+    fragment.appendChild(p);
+    return true;
+  }
+
+  function appendPreviewList(fragment, sourceList, isOrdered) {
+    const list = document.createElement(isOrdered ? "ol" : "ul");
+    list.style.setProperty("list-style-type", isOrdered ? "decimal" : "disc");
+    list.style.setProperty("padding-left", isOrdered ? "1.25rem" : "1.2rem");
+    list.style.setProperty("margin", "0 0 0.45rem");
+
+    const items = Array.from(sourceList.children || [])
+      .filter((node) => {
+        const tag = node && node.tagName ? node.tagName.toLowerCase() : "";
+        return tag === "li";
+      })
+      .slice(0, MAX_PREVIEW_LIST_ITEMS);
+
+    items.forEach((itemNode) => {
+      const text = String(itemNode.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text) {
+        return;
+      }
+      const li = document.createElement("li");
+      li.textContent = text;
+      li.style.setProperty("display", "list-item", "important");
+      li.style.setProperty("margin", "0.14rem 0");
+      list.appendChild(li);
+    });
+
+    if (!list.children.length) {
+      return false;
+    }
+    fragment.appendChild(list);
+    return true;
+  }
+
+  function extractElementTextWithoutLists(element) {
+    if (!element) {
+      return "";
+    }
+    const clone = element.cloneNode(true);
+    clone.querySelectorAll("ul,ol").forEach((node) => node.remove());
+    return String(clone.textContent || "").replace(/\s+/g, " ").trim();
   }
 
   function stripHtml(html) {

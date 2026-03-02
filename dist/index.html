@@ -3,175 +3,137 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Invoice Access Manager</title>
+    <title>Customer Bulletin Board</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   </head>
   <body>
     <div class="app-shell">
       <header class="app-header">
         <div>
           <p class="eyebrow">Rocketlane Custom App</p>
-          <h1>Invoice Access Manager</h1>
-          <p id="scopeText" class="scope-text">Loading workspace context...</p>
+          <h1>Customer Bulletin Board</h1>
+          <p id="boardScope" class="scope-text">Loading workspace context...</p>
         </div>
-        <div class="header-meta">
+        <div class="header-actions">
           <span id="connectionBadge" class="badge badge-muted">Initializing</span>
-          <span id="roleBadge" class="badge badge-muted">Role unknown</span>
+          <button id="addNoteButton" class="btn btn-primary" type="button">
+            + New sticky note
+          </button>
         </div>
       </header>
 
-      <section class="tabs" role="tablist" aria-label="App sections">
-        <button
-          id="tabInvoicesButton"
-          class="tab-button active"
-          role="tab"
-          aria-selected="true"
-          data-tab="invoices"
-          type="button"
-        >
-          Invoices
+      <section class="control-row">
+        <label class="control search-control">
+          <span>Search</span>
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="Search notes, updates, action items..."
+          />
+        </label>
+        <label class="control">
+          <span>Filter</span>
+          <select id="filterSelect">
+            <option value="all">All notes</option>
+            <option value="pinned">Pinned first</option>
+            <option value="recent">Recently updated</option>
+          </select>
+        </label>
+        <button id="seedDemoButton" class="btn btn-subtle" type="button">
+          Load demo notes
         </button>
-        <button
-          id="tabLogsButton"
-          class="tab-button hidden"
-          role="tab"
-          aria-selected="false"
-          data-tab="logs"
-          type="button"
-        >
-          Admin diagnostics
+        <button id="clearBoardButton" class="btn btn-danger-subtle" type="button">
+          Clear board
         </button>
       </section>
 
-      <section id="tabInvoices" class="tab-panel">
-        <main class="layout-grid">
-          <aside class="panel upload-panel">
-            <h2>Import PDF invoice</h2>
-            <p class="muted" id="importPolicyText">
-              Upload invoices and assign a project manager email.
+      <div id="boardStats" class="board-stats"></div>
+
+      <main class="content-grid">
+        <section class="notes-column">
+          <div id="notesGrid" class="notes-grid"></div>
+          <div id="notesEmptyState" class="empty-state hidden">
+            <h2>No notes found</h2>
+            <p>Create your first sticky note to start the bulletin board.</p>
+          </div>
+        </section>
+
+        <aside class="editor-column">
+          <div id="editorEmptyState" class="editor-empty">
+            <h2>Select a sticky note</h2>
+            <p>
+              Pick a note to edit it, add bullets, or create numbered lists like
+              Gmail.
             </p>
+          </div>
 
+          <section id="editorPanel" class="editor-panel hidden">
             <label class="control">
-              <span>Invoice PDF</span>
-              <input id="invoiceFileInput" type="file" accept="application/pdf,.pdf" />
-            </label>
-
-            <label class="control">
-              <span>Invoice title</span>
+              <span>Title</span>
               <input
-                id="invoiceTitleInput"
-                type="text"
-                maxlength="140"
-                placeholder="e.g. Feb 2026 Onboarding Services"
-              />
-            </label>
-
-            <label class="control">
-              <span>Project name</span>
-              <input
-                id="projectNameInput"
+                id="noteTitleInput"
                 type="text"
                 maxlength="120"
-                placeholder="Project display name"
-              />
-            </label>
-
-            <label class="control">
-              <span>Project ID (optional)</span>
-              <input id="projectIdInput" type="text" maxlength="80" placeholder="Project ID" />
-            </label>
-
-            <label class="control">
-              <span>Project manager email</span>
-              <input
-                id="pmEmailInput"
-                type="email"
-                maxlength="160"
-                placeholder="pm@example.com"
+                placeholder="Note title"
               />
             </label>
 
             <div>
-              <p class="tiny-label">Emails detected in PDF</p>
-              <div id="detectedEmails" class="chips"></div>
+              <p class="tiny-label">Sticky color</p>
+              <div id="colorPicker" class="color-picker"></div>
             </div>
 
-            <button id="importInvoiceButton" class="btn btn-primary" type="button">
-              Import invoice
-            </button>
-            <p id="importStatus" class="status-text"></p>
-          </aside>
-
-          <section class="panel list-panel">
-            <div class="panel-header">
-              <h2>Invoice library</h2>
-              <p id="invoiceStats" class="muted"></p>
+            <div class="rich-toolbar" aria-label="Formatting toolbar">
+              <button class="format-button" data-command="bold" type="button">
+                <strong>B</strong>
+              </button>
+              <button class="format-button" data-command="italic" type="button">
+                <em>I</em>
+              </button>
+              <button class="format-button" data-command="underline" type="button">
+                <u>U</u>
+              </button>
+              <div class="toolbar-divider"></div>
+              <button
+                class="format-button"
+                data-command="insertUnorderedList"
+                type="button"
+              >
+                • List
+              </button>
+              <button
+                class="format-button"
+                data-command="insertOrderedList"
+                type="button"
+              >
+                1. List
+              </button>
+              <button class="format-button" data-command="removeFormat" type="button">
+                Clear
+              </button>
             </div>
 
-            <label class="control">
-              <span>Search</span>
-              <input
-                id="searchInput"
-                type="search"
-                placeholder="Search by invoice title, project, or email..."
-              />
-            </label>
+            <div
+              id="noteBodyInput"
+              class="note-body-input"
+              contenteditable="true"
+              data-placeholder="Write announcements, updates, and action items..."
+            ></div>
 
-            <p id="visibilitySummary" class="visibility-summary"></p>
-
-            <div id="invoiceList" class="invoice-list"></div>
-            <div id="invoiceEmptyState" class="empty-state hidden">
-              <h3>No invoices found</h3>
-              <p>Import a PDF invoice to get started.</p>
-            </div>
-          </section>
-
-          <section class="panel viewer-panel">
-            <div id="viewerEmptyState" class="empty-state">
-              <h3>Select an invoice</h3>
-              <p>Choose an invoice on the left to preview the PDF.</p>
-            </div>
-
-            <div id="viewerPanel" class="viewer-content hidden">
-              <div class="viewer-header">
-                <div>
-                  <h3 id="viewerTitle">Invoice</h3>
-                  <p id="viewerMeta" class="muted"></p>
-                </div>
-                <button id="openInNewTabButton" class="btn btn-subtle" type="button">
-                  Open in new tab
+            <footer class="editor-footer">
+              <p id="saveState" class="save-state">Saved</p>
+              <div class="footer-actions">
+                <button id="pinNoteButton" class="btn btn-subtle" type="button">
+                  Pin
+                </button>
+                <button id="deleteNoteButton" class="btn btn-danger-subtle" type="button">
+                  Delete
                 </button>
               </div>
-              <iframe
-                id="pdfViewerFrame"
-                class="pdf-frame"
-                title="Invoice PDF preview"
-                loading="lazy"
-              ></iframe>
-            </div>
+            </footer>
           </section>
-        </main>
-      </section>
-
-      <section id="tabLogs" class="tab-panel hidden">
-        <section class="panel logs-panel">
-          <div class="panel-header">
-            <h2>Error logs & solution suggestions</h2>
-            <button id="clearLogsButton" class="btn btn-danger-subtle" type="button">
-              Clear logs
-            </button>
-          </div>
-          <p class="muted">
-            This tab is visible only to admins. Each log includes a suggested remediation.
-          </p>
-          <div id="logsList" class="logs-list"></div>
-          <div id="logsEmptyState" class="empty-state hidden">
-            <h3>No logs recorded</h3>
-            <p>Operational errors and warnings will appear here.</p>
-          </div>
-        </section>
-      </section>
+        </aside>
+      </main>
     </div>
 
     <script src="./app.js"></script>

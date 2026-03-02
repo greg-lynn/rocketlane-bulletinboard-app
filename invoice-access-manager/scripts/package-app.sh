@@ -6,7 +6,7 @@ cd "${ROOT_DIR}"
 
 mkdir -p artifacts
 
-ZIP_NAME="rocketlane-bulletin-board-app.zip"
+ZIP_NAME="rocketlane-invoice-access-manager-app.zip"
 ZIP_PATH="artifacts/${ZIP_NAME}"
 
 rm -f "${ZIP_PATH}"

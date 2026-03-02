@@ -1,123 +1,157 @@
 "use strict";
 
-(function bootstrapBulletinBoard() {
-  const STORAGE_PREFIX = "rocketlane-bulletin-board";
-  const NOTE_COLORS = [
-    { id: "yellow", label: "Sunny", hex: "#fff8a6" },
-    { id: "blue", label: "Ocean", hex: "#cce8ff" },
-    { id: "green", label: "Mint", hex: "#d8f5d2" },
-    { id: "pink", label: "Rose", hex: "#ffd7ea" },
-    { id: "purple", label: "Lavender", hex: "#ecd8ff" },
-  ];
+(function bootstrapInvoiceAccessManager() {
+  const STORAGE_PREFIX = "rocketlane-invoice-access";
+  const STORAGE_VERSION = "v1";
+  const LOG_LIMIT = 150;
+  const PDF_WORKER_CDN =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+  const EMAIL_VALIDATION_PATTERN = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
+
+  const SUGGESTIONS = {
+    RUNTIME_INIT_FAILED:
+      "Verify the app is opened inside Rocketlane and the installation has required permissions.",
+    PDF_LIB_UNAVAILABLE:
+      "Allow access to the PDF.js CDN or bundle PDF.js with the app assets.",
+    PDF_PARSE_FAILED:
+      "Upload a text-based PDF invoice (or run OCR first) so the PM email can be extracted.",
+    PDF_EMAIL_NOT_FOUND:
+      "Confirm the project manager email exists in the PDF text content.",
+    INVALID_IMPORT:
+      "Fill all required fields and ensure PM email appears in the detected PDF emails.",
+    ACCESS_DENIED:
+      "Non-admin users can only import/view invoices where PM email matches their login email.",
+    STORAGE_READ_FAILED:
+      "Check browser storage permissions and clear corrupted local app data if needed.",
+    STORAGE_WRITE_FAILED:
+      "Storage quota may be full. Remove older invoices or upload smaller PDFs.",
+    VIEWER_OPEN_FAILED:
+      "Re-import the invoice PDF and retry opening in a new tab.",
+  };
 
   const state = {
     client: null,
     context: null,
-    storageKey: "",
-    notes: [],
-    selectedNoteId: null,
+    rawUser: null,
+    rawProject: null,
+    storageKeys: null,
+    invoices: [],
+    logs: [],
+    selectedInvoiceId: null,
     searchQuery: "",
-    filter: "all",
-    saveTimer: null,
+    detectedEmails: [],
+    activeTab: "invoices",
+    parseToken: "",
+    access: {
+      role: "non_admin",
+      roleLabel: "Restricted",
+      isAdmin: false,
+      email: "",
+      displayName: "",
+      canImport: false,
+    },
   };
 
   const refs = {};
 
   document.addEventListener("DOMContentLoaded", () => {
     initializeApp().catch((error) => {
-      console.error("Unable to initialize app", error);
+      console.error("Unable to initialize invoice app", error);
       if (refs.connectionBadge) {
         refs.connectionBadge.textContent = "Initialization failed";
       }
+      appendLog(
+        "RUNTIME_INIT_FAILED",
+        "Invoice app failed to initialize.",
+        error
+      );
+      renderLogs();
     });
   });
 
   async function initializeApp() {
     cacheDomReferences();
     bindEvents();
-    buildColorPicker();
 
     const runtime = await initializeRuntime();
     state.client = runtime.client;
     state.context = runtime.context;
-    state.storageKey = createStorageKey(runtime.context);
+    state.rawUser = runtime.rawUser;
+    state.rawProject = runtime.rawProject;
+    state.storageKeys = createStorageKeys(runtime.context);
+    state.access = deriveAccessProfile(runtime.rawUser, runtime.context);
 
-    updateHeader(runtime);
-    loadNotes();
+    updateHeader(runtime.connected);
+    configureUiForAccess();
+    hydrateImportDefaults();
 
-    const query = new URLSearchParams(window.location.search);
-    if (state.notes.length === 0 && shouldSeedDemo(query)) {
-      seedDemoNotes();
+    loadLogs();
+    loadInvoices();
+
+    if (runtime.error) {
+      appendLog(
+        "RUNTIME_INIT_FAILED",
+        "Rocketlane SDK was unavailable. Running in local preview mode.",
+        runtime.error
+      );
     }
 
-    if (state.notes.length === 0) {
-      createDefaultWelcomeNote();
-    }
-
-    if (!state.selectedNoteId && state.notes.length > 0) {
-      state.selectedNoteId = state.notes[0].id;
-    }
-
+    ensureSelectedInvoice();
     renderAll();
   }
 
   function cacheDomReferences() {
-    refs.boardScope = document.getElementById("boardScope");
+    refs.scopeText = document.getElementById("scopeText");
     refs.connectionBadge = document.getElementById("connectionBadge");
-    refs.addNoteButton = document.getElementById("addNoteButton");
-    refs.seedDemoButton = document.getElementById("seedDemoButton");
-    refs.clearBoardButton = document.getElementById("clearBoardButton");
+    refs.roleBadge = document.getElementById("roleBadge");
+    refs.tabInvoicesButton = document.getElementById("tabInvoicesButton");
+    refs.tabLogsButton = document.getElementById("tabLogsButton");
+    refs.tabInvoices = document.getElementById("tabInvoices");
+    refs.tabLogs = document.getElementById("tabLogs");
+    refs.importPolicyText = document.getElementById("importPolicyText");
+    refs.invoiceFileInput = document.getElementById("invoiceFileInput");
+    refs.invoiceTitleInput = document.getElementById("invoiceTitleInput");
+    refs.projectNameInput = document.getElementById("projectNameInput");
+    refs.projectIdInput = document.getElementById("projectIdInput");
+    refs.pmEmailInput = document.getElementById("pmEmailInput");
+    refs.detectedEmails = document.getElementById("detectedEmails");
+    refs.importInvoiceButton = document.getElementById("importInvoiceButton");
+    refs.importStatus = document.getElementById("importStatus");
     refs.searchInput = document.getElementById("searchInput");
-    refs.filterSelect = document.getElementById("filterSelect");
-    refs.boardStats = document.getElementById("boardStats");
-    refs.notesGrid = document.getElementById("notesGrid");
-    refs.notesEmptyState = document.getElementById("notesEmptyState");
-    refs.editorEmptyState = document.getElementById("editorEmptyState");
-    refs.editorPanel = document.getElementById("editorPanel");
-    refs.noteTitleInput = document.getElementById("noteTitleInput");
-    refs.noteBodyInput = document.getElementById("noteBodyInput");
-    refs.colorPicker = document.getElementById("colorPicker");
-    refs.saveState = document.getElementById("saveState");
-    refs.pinNoteButton = document.getElementById("pinNoteButton");
-    refs.deleteNoteButton = document.getElementById("deleteNoteButton");
+    refs.visibilitySummary = document.getElementById("visibilitySummary");
+    refs.invoiceStats = document.getElementById("invoiceStats");
+    refs.invoiceList = document.getElementById("invoiceList");
+    refs.invoiceEmptyState = document.getElementById("invoiceEmptyState");
+    refs.viewerEmptyState = document.getElementById("viewerEmptyState");
+    refs.viewerPanel = document.getElementById("viewerPanel");
+    refs.viewerTitle = document.getElementById("viewerTitle");
+    refs.viewerMeta = document.getElementById("viewerMeta");
+    refs.pdfViewerFrame = document.getElementById("pdfViewerFrame");
+    refs.openInNewTabButton = document.getElementById("openInNewTabButton");
+    refs.logsList = document.getElementById("logsList");
+    refs.logsEmptyState = document.getElementById("logsEmptyState");
+    refs.clearLogsButton = document.getElementById("clearLogsButton");
   }
 
   function bindEvents() {
-    refs.addNoteButton.addEventListener("click", onAddNote);
-    refs.seedDemoButton.addEventListener("click", () => {
-      seedDemoNotes();
-      renderAll();
+    refs.tabInvoicesButton.addEventListener("click", () => setActiveTab("invoices"));
+    refs.tabLogsButton.addEventListener("click", () => setActiveTab("logs"));
+
+    refs.invoiceFileInput.addEventListener("change", onInvoiceFileSelected);
+    refs.pmEmailInput.addEventListener("blur", () => {
+      refs.pmEmailInput.value = normalizeEmail(refs.pmEmailInput.value);
     });
-    refs.clearBoardButton.addEventListener("click", onClearBoard);
+    refs.importInvoiceButton.addEventListener("click", onImportInvoice);
     refs.searchInput.addEventListener("input", (event) => {
-      state.searchQuery = event.target.value.trim();
-      renderNotesGrid();
-      renderStats();
+      state.searchQuery = String(event.target.value || "").trim().toLowerCase();
+      ensureSelectedInvoice();
+      renderInvoiceList();
+      renderInvoiceStats();
+      renderViewer();
     });
-    refs.filterSelect.addEventListener("change", (event) => {
-      state.filter = event.target.value;
-      renderNotesGrid();
-      renderStats();
-    });
-
-    refs.noteTitleInput.addEventListener("input", onTitleInput);
-    refs.noteBodyInput.addEventListener("input", onBodyInput);
-    refs.noteBodyInput.addEventListener("paste", onEditorPaste);
-
-    refs.pinNoteButton.addEventListener("click", onTogglePinFromEditor);
-    refs.deleteNoteButton.addEventListener("click", onDeleteFromEditor);
-
-    refs.colorPicker.addEventListener("click", onColorSwatchClick);
-
-    document.querySelectorAll(".format-button").forEach((button) => {
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", () => {
-        const command = button.getAttribute("data-command");
-        if (command) {
-          executeFormattingCommand(command);
-        }
-      });
-    });
+    refs.openInNewTabButton.addEventListener("click", onOpenInNewTab);
+    refs.clearLogsButton.addEventListener("click", onClearLogs);
   }
 
   async function initializeRuntime() {
@@ -129,6 +163,9 @@
         client: null,
         connected: false,
         context: fallback,
+        rawUser: null,
+        rawProject: null,
+        error: null,
       };
     }
 
@@ -144,13 +181,19 @@
         client,
         connected: true,
         context: mergeContextData(fallback, account, user, project),
+        rawUser: user,
+        rawProject: project,
+        error: null,
       };
     } catch (error) {
-      console.warn("Rocketlane SDK unavailable, using local preview mode.", error);
+      console.warn("Rocketlane SDK init failed; falling back to query context.", error);
       return {
         client: null,
         connected: false,
         context: fallback,
+        rawUser: null,
+        rawProject: null,
+        error,
       };
     }
   }
@@ -168,11 +211,10 @@
         user: "GET_USER_DATA",
         project: "GET_PROJECT_DATA",
       };
-      const key = aliases[objectName];
       const identifier =
         client.data.dataIdentifiers &&
-        key &&
-        client.data.dataIdentifiers[key];
+        aliases[objectName] &&
+        client.data.dataIdentifiers[aliases[objectName]];
 
       if (!identifier) {
         return null;
@@ -184,6 +226,19 @@
         return null;
       }
     }
+  }
+
+  function getContextFromQuery(query) {
+    return {
+      accountId: query.get("accountId") || "",
+      accountName: query.get("account") || "Rocketlane Workspace",
+      userId: query.get("userId") || "",
+      userName: query.get("user") || "Rocketlane User",
+      userEmail: normalizeEmail(query.get("email") || ""),
+      userRole: query.get("role") || "",
+      projectId: query.get("projectId") || "",
+      projectName: query.get("project") || "",
+    };
   }
 
   function mergeContextData(fallback, account, user, project) {
@@ -205,6 +260,25 @@
         pickFirst(
           user && (user.name || user.fullName || user.displayName || user.email)
         ) || fallback.userName,
+      userEmail:
+        normalizeEmail(
+          pickFirst(
+            user &&
+              (user.email ||
+                user.workEmail ||
+                user.userEmail ||
+                (user.profile && user.profile.email))
+          ) || fallback.userEmail
+        ),
+      userRole:
+        pickFirst(
+          user &&
+            (user.role ||
+              user.userRole ||
+              user.permissionSet ||
+              user.permissionLevel ||
+              user.userType)
+        ) || fallback.userRole,
       projectId:
         pickFirst(project && (project.id || project.projectId || project._id)) ||
         fallback.projectId,
@@ -214,501 +288,1031 @@
     };
   }
 
-  function getContextFromQuery(query) {
-    return {
-      accountId: query.get("accountId") || "",
-      accountName: query.get("account") || "Rocketlane Workspace",
-      userId: query.get("userId") || "",
-      userName: query.get("user") || "Rocketlane User",
-      projectId: query.get("projectId") || "",
-      projectName: query.get("project") || "",
-    };
-  }
+  function updateHeader(connected) {
+    const view = state.context.projectName || "Cross-project view";
+    refs.scopeText.textContent =
+      "Scope: " + state.context.accountName + " / " + view + " invoices";
 
-  function updateHeader(runtime) {
-    const context = runtime.context;
-    const view = context.projectName || "Customer home";
-
-    refs.boardScope.textContent =
-      "Scope: " + context.accountName + " / " + view + " bulletin board";
-
-    if (runtime.connected) {
+    if (connected) {
       refs.connectionBadge.className = "badge badge-ok";
       refs.connectionBadge.textContent = "Connected to Rocketlane";
     } else {
       refs.connectionBadge.className = "badge badge-local";
       refs.connectionBadge.textContent = "Local preview mode";
     }
+
+    refs.roleBadge.className = "badge " + (state.access.isAdmin ? "badge-admin" : "badge-muted");
+    const identity = state.access.email || state.access.displayName || "Unknown user";
+    refs.roleBadge.textContent = state.access.roleLabel + " - " + identity;
   }
 
-  function createStorageKey(context) {
+  function configureUiForAccess() {
+    if (state.access.isAdmin) {
+      refs.tabLogsButton.classList.remove("hidden");
+      refs.pmEmailInput.readOnly = false;
+      refs.importPolicyText.textContent =
+        "Admin mode: import invoices for any project manager email that is detected in the PDF.";
+      refs.importInvoiceButton.disabled = false;
+    } else {
+      refs.tabLogsButton.classList.add("hidden");
+      refs.pmEmailInput.readOnly = true;
+      if (state.access.email) {
+        refs.pmEmailInput.value = state.access.email;
+        refs.importPolicyText.textContent =
+          "Restricted mode: you can import and view only invoices where PM email matches your Rocketlane sign-in email.";
+        refs.importInvoiceButton.disabled = false;
+      } else {
+        refs.importPolicyText.textContent =
+          "Restricted mode: no sign-in email was detected, so invoice import is disabled.";
+        refs.importInvoiceButton.disabled = true;
+      }
+    }
+  }
+
+  function hydrateImportDefaults() {
+    if (state.context.projectName) {
+      refs.projectNameInput.value = state.context.projectName;
+    }
+    if (state.context.projectId) {
+      refs.projectIdInput.value = state.context.projectId;
+    }
+    if (!refs.pmEmailInput.value && state.access.email) {
+      refs.pmEmailInput.value = state.access.email;
+    }
+  }
+
+  function setActiveTab(tab) {
+    if (tab === "logs" && !state.access.isAdmin) {
+      tab = "invoices";
+    }
+
+    state.activeTab = tab;
+    const showInvoices = tab === "invoices";
+
+    refs.tabInvoicesButton.classList.toggle("active", showInvoices);
+    refs.tabInvoicesButton.setAttribute("aria-selected", String(showInvoices));
+    refs.tabInvoices.classList.toggle("hidden", !showInvoices);
+
+    const showLogs = !showInvoices;
+    refs.tabLogsButton.classList.toggle("active", showLogs);
+    refs.tabLogsButton.setAttribute("aria-selected", String(showLogs));
+    refs.tabLogs.classList.toggle("hidden", !showLogs);
+
+    if (showLogs) {
+      renderLogs();
+    }
+  }
+
+  function createStorageKeys(context) {
     const accountScope = slug(context.accountId || context.accountName || "workspace");
-    const viewScope = slug(
-      context.projectId || context.projectName || "customer-home-view"
-    );
-    return STORAGE_PREFIX + ":" + accountScope + ":" + viewScope;
+    return {
+      invoices: [
+        STORAGE_PREFIX,
+        "invoices",
+        STORAGE_VERSION,
+        accountScope,
+      ].join(":"),
+      logs: [STORAGE_PREFIX, "logs", STORAGE_VERSION, accountScope].join(":"),
+    };
   }
 
-  function loadNotes() {
-    const raw = window.localStorage.getItem(state.storageKey);
+  function loadInvoices() {
+    const raw = safeStorageGet(state.storageKeys.invoices);
     if (!raw) {
-      state.notes = [];
+      state.invoices = [];
       return;
     }
 
     try {
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
-        state.notes = [];
+        state.invoices = [];
         return;
       }
 
-      state.notes = parsed.map((note) => normalizeNote(note));
+      state.invoices = parsed
+        .map((invoice) => normalizeInvoice(invoice))
+        .filter(Boolean);
     } catch (error) {
-      console.warn("Unable to parse saved notes", error);
-      state.notes = [];
+      state.invoices = [];
+      appendLog(
+        "STORAGE_READ_FAILED",
+        "Could not parse saved invoice data. Existing local invoice cache was reset.",
+        error
+      );
     }
   }
 
-  function persistNotes() {
-    window.localStorage.setItem(state.storageKey, JSON.stringify(state.notes));
-    setSaveState("Saved " + formatTime(new Date().toISOString()));
+  function persistInvoices() {
+    try {
+      safeStorageSet(state.storageKeys.invoices, JSON.stringify(state.invoices));
+      return true;
+    } catch (error) {
+      appendLog(
+        "STORAGE_WRITE_FAILED",
+        "Failed to save invoice data to browser storage.",
+        error
+      );
+      return false;
+    }
   }
 
-  function queueSave() {
-    setSaveState("Saving...");
-    if (state.saveTimer) {
-      window.clearTimeout(state.saveTimer);
+  function loadLogs() {
+    const raw = safeStorageGet(state.storageKeys.logs);
+    if (!raw) {
+      state.logs = [];
+      return;
     }
 
-    state.saveTimer = window.setTimeout(() => {
-      persistNotes();
-    }, 240);
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        state.logs = [];
+        return;
+      }
+      state.logs = parsed
+        .map((item) => normalizeLog(item))
+        .filter(Boolean)
+        .slice(0, LOG_LIMIT);
+    } catch (_error) {
+      state.logs = [];
+    }
   }
 
-  function setSaveState(text) {
-    refs.saveState.textContent = text;
+  function persistLogs() {
+    try {
+      safeStorageSet(state.storageKeys.logs, JSON.stringify(state.logs.slice(0, LOG_LIMIT)));
+    } catch (_error) {
+      // Avoid recursive logging if storage itself is unavailable.
+    }
   }
 
-  function createDefaultWelcomeNote() {
-    const note = normalizeNote({
-      title: "Welcome to your customer bulletin board",
-      pinned: true,
-      color: "yellow",
-      content:
-        "<p>This sticky board is ready for your Rocketlane home page updates.</p>" +
-        "<ul><li>Share announcements</li><li>Track open action items</li></ul>" +
-        "<p>Use the toolbar for bullet and numbered lists like Gmail.</p>",
+  function appendLog(code, message, error, suggestion) {
+    const entry = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      code: code || "UNKNOWN",
+      message: message || "Unexpected app event.",
+      details: simplifyError(error),
+      suggestion: suggestion || SUGGESTIONS[code] || "Review app configuration and retry.",
+    };
+
+    state.logs.unshift(entry);
+    if (state.logs.length > LOG_LIMIT) {
+      state.logs = state.logs.slice(0, LOG_LIMIT);
+    }
+    persistLogs();
+    if (state.access.isAdmin && refs.logsList) {
+      renderLogs();
+    }
+  }
+
+  async function onInvoiceFileSelected() {
+    const file = refs.invoiceFileInput.files && refs.invoiceFileInput.files[0];
+    state.detectedEmails = [];
+    renderDetectedEmails();
+
+    if (!file) {
+      setImportStatus("", null);
+      return;
+    }
+
+    if (!isPdfFile(file)) {
+      setImportStatus("Only PDF files are supported.", "error");
+      appendLog("INVALID_IMPORT", "Rejected non-PDF file during import validation.");
+      return;
+    }
+
+    if (!refs.invoiceTitleInput.value.trim()) {
+      refs.invoiceTitleInput.value = file.name.replace(/\.pdf$/i, "");
+    }
+
+    const token = createId();
+    state.parseToken = token;
+    setImportStatus("Scanning PDF for email addresses...", null);
+
+    try {
+      const emails = await extractEmailsFromPdf(file);
+      if (token !== state.parseToken) {
+        return;
+      }
+
+      state.detectedEmails = emails;
+      renderDetectedEmails();
+
+      if (!emails.length) {
+        setImportStatus(
+          "No email addresses detected in this PDF. A PM email must be extractable.",
+          "error"
+        );
+        appendLog(
+          "PDF_EMAIL_NOT_FOUND",
+          "No email addresses were found while parsing selected PDF invoice."
+        );
+        return;
+      }
+
+      if (!refs.pmEmailInput.value.trim()) {
+        refs.pmEmailInput.value = emails[0];
+      }
+
+      setImportStatus(
+        "Detected " + emails.length + " email address(es) from PDF text.",
+        "success"
+      );
+    } catch (error) {
+      if (token !== state.parseToken) {
+        return;
+      }
+      setImportStatus("Unable to parse the PDF file.", "error");
+      appendLog("PDF_PARSE_FAILED", "Unable to parse uploaded PDF invoice.", error);
+    }
+  }
+
+  async function onImportInvoice() {
+    const file = refs.invoiceFileInput.files && refs.invoiceFileInput.files[0];
+    if (!file) {
+      setImportStatus("Select a PDF invoice first.", "error");
+      appendLog("INVALID_IMPORT", "Import attempted without selecting a file.");
+      return;
+    }
+
+    if (!isPdfFile(file)) {
+      setImportStatus("Only PDF files can be imported.", "error");
+      appendLog("INVALID_IMPORT", "Non-PDF file blocked from import.");
+      return;
+    }
+
+    if (!state.access.isAdmin && !state.access.email) {
+      setImportStatus("Sign-in email is required for restricted imports.", "error");
+      appendLog(
+        "ACCESS_DENIED",
+        "Import blocked because non-admin email context is unavailable."
+      );
+      return;
+    }
+
+    const title = String(refs.invoiceTitleInput.value || "").trim() || file.name;
+    const projectName =
+      String(refs.projectNameInput.value || "").trim() ||
+      state.context.projectName ||
+      "Unspecified project";
+    const projectId =
+      String(refs.projectIdInput.value || "").trim() || state.context.projectId || "";
+    const pmEmail = normalizeEmail(refs.pmEmailInput.value);
+
+    if (!isValidEmail(pmEmail)) {
+      setImportStatus("Enter a valid project manager email.", "error");
+      appendLog("INVALID_IMPORT", "Import blocked due to invalid PM email.");
+      return;
+    }
+
+    if (!state.detectedEmails.length) {
+      setImportStatus("Parsing PDF for emails before import...", null);
+      try {
+        state.detectedEmails = await extractEmailsFromPdf(file);
+        renderDetectedEmails();
+      } catch (error) {
+        setImportStatus("Unable to parse the PDF file.", "error");
+        appendLog("PDF_PARSE_FAILED", "PDF parsing failed during import.", error);
+        return;
+      }
+    }
+
+    if (!state.detectedEmails.length) {
+      setImportStatus(
+        "No email addresses detected in PDF. Import cancelled.",
+        "error"
+      );
+      appendLog(
+        "PDF_EMAIL_NOT_FOUND",
+        "Invoice import failed because no PM email could be extracted from PDF."
+      );
+      return;
+    }
+
+    const detectedSet = new Set(state.detectedEmails.map(normalizeEmail));
+    if (!detectedSet.has(pmEmail)) {
+      setImportStatus(
+        "PM email must be present in the PDF's detected email list.",
+        "error"
+      );
+      appendLog(
+        "INVALID_IMPORT",
+        "PM email did not match detected PDF emails during import."
+      );
+      return;
+    }
+
+    if (!state.access.isAdmin && pmEmail !== state.access.email) {
+      setImportStatus(
+        "Restricted users can only import invoices assigned to their own email.",
+        "error"
+      );
+      appendLog(
+        "ACCESS_DENIED",
+        "Non-admin import blocked because PM email did not match signed-in email."
+      );
+      return;
+    }
+
+    setImportStatus("Importing invoice...", null);
+
+    try {
+      const pdfDataUrl = await readFileAsDataUrl(file);
+      const now = new Date().toISOString();
+      const invoice = normalizeInvoice({
+        id: createId(),
+        title,
+        fileName: file.name,
+        projectName,
+        projectId,
+        projectManagerEmail: pmEmail,
+        detectedEmails: Array.from(detectedSet),
+        uploadedByEmail: state.access.email,
+        uploadedByName: state.access.displayName,
+        uploadedAt: now,
+        sizeBytes: Number(file.size || 0),
+        mimeType: file.type || "application/pdf",
+        pdfDataUrl,
+      });
+
+      if (!invoice) {
+        throw new Error("Failed to normalize invoice payload.");
+      }
+
+      state.invoices.unshift(invoice);
+      if (!persistInvoices()) {
+        state.invoices = state.invoices.filter((item) => item.id !== invoice.id);
+        setImportStatus("Import failed while saving invoice.", "error");
+        return;
+      }
+
+      state.selectedInvoiceId = invoice.id;
+      resetImportInputs();
+      setImportStatus("Invoice imported successfully.", "success");
+      renderAll();
+    } catch (error) {
+      setImportStatus("Import failed. Please retry with a valid PDF invoice.", "error");
+      appendLog("STORAGE_WRITE_FAILED", "Invoice import failed.", error);
+    }
+  }
+
+  function resetImportInputs() {
+    refs.invoiceFileInput.value = "";
+    refs.invoiceTitleInput.value = "";
+    state.detectedEmails = [];
+    renderDetectedEmails();
+
+    if (state.access.isAdmin) {
+      refs.pmEmailInput.value = "";
+    } else {
+      refs.pmEmailInput.value = state.access.email;
+    }
+
+    if (state.context.projectName && !refs.projectNameInput.value.trim()) {
+      refs.projectNameInput.value = state.context.projectName;
+    }
+    if (state.context.projectId && !refs.projectIdInput.value.trim()) {
+      refs.projectIdInput.value = state.context.projectId;
+    }
+  }
+
+  function setImportStatus(text, tone) {
+    refs.importStatus.textContent = text || "";
+    refs.importStatus.classList.remove("error", "success");
+    if (tone === "error") {
+      refs.importStatus.classList.add("error");
+    } else if (tone === "success") {
+      refs.importStatus.classList.add("success");
+    }
+  }
+
+  async function extractEmailsFromPdf(file) {
+    ensurePdfJsAvailable();
+    const text = await extractTextFromPdf(file);
+    return extractEmailsFromText(text);
+  }
+
+  function ensurePdfJsAvailable() {
+    if (!window.pdfjsLib || typeof window.pdfjsLib.getDocument !== "function") {
+      appendLog(
+        "PDF_LIB_UNAVAILABLE",
+        "PDF.js was not loaded, so PDF parsing cannot proceed."
+      );
+      throw new Error("PDF.js library is not available.");
+    }
+    if (window.pdfjsLib.GlobalWorkerOptions) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_CDN;
+    }
+  }
+
+  async function extractTextFromPdf(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    let loadingTask;
+    try {
+      loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdfDocument = await loadingTask.promise;
+      const parts = [];
+
+      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+        const page = await pdfDocument.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item) => item.str).join(" ");
+        parts.push(pageText);
+      }
+
+      if (typeof pdfDocument.cleanup === "function") {
+        pdfDocument.cleanup();
+      }
+
+      return parts.join("\n");
+    } catch (error) {
+      appendLog("PDF_PARSE_FAILED", "PDF text extraction failed.", error);
+      throw error;
+    } finally {
+      if (loadingTask && typeof loadingTask.destroy === "function") {
+        loadingTask.destroy();
+      }
+    }
+  }
+
+  function extractEmailsFromText(text) {
+    const matches = String(text || "").match(EMAIL_PATTERN) || [];
+    const deduped = [];
+    const seen = new Set();
+    matches.forEach((value) => {
+      const email = normalizeEmail(value);
+      if (!isValidEmail(email) || seen.has(email)) {
+        return;
+      }
+      seen.add(email);
+      deduped.push(email);
     });
-
-    state.notes = [note];
-    state.selectedNoteId = note.id;
-    persistNotes();
+    return deduped;
   }
 
-  function seedDemoNotes() {
-    const now = Date.now();
-    const demo = [
-      {
-        title: "Go-live countdown",
-        pinned: true,
-        color: "yellow",
-        updatedAt: new Date(now - 1000 * 60 * 4).toISOString(),
-        content:
-          "<p>Final checks for launch:</p>" +
-          "<ol><li>Confirm SSO handoff</li><li>Validate training links</li><li>Publish kickoff update</li></ol>",
-      },
-      {
-        title: "Customer asks this week",
-        color: "blue",
-        updatedAt: new Date(now - 1000 * 60 * 30).toISOString(),
-        content:
-          "<p>Top requests from customer standup:</p>" +
-          "<ul><li>Add billing FAQ in portal</li><li>Share onboarding checklist</li><li>Post ETA for migration</li></ul>",
-      },
-      {
-        title: "Ops reminders",
-        color: "green",
-        updatedAt: new Date(now - 1000 * 60 * 70).toISOString(),
-        content:
-          "<p>Keep these visible:</p>" +
-          "<ul><li>Daily sync at 10:00 AM</li><li>Escalation channel monitored</li><li>Weekly recap every Friday</li></ul>",
-      },
-      {
-        title: "Template for announcements",
-        color: "pink",
-        updatedAt: new Date(now - 1000 * 60 * 95).toISOString(),
-        content:
-          "<p><strong>Update:</strong> <em>What changed?</em></p>" +
-          "<p><strong>Impact:</strong> Who is affected?</p>" +
-          "<p><strong>Next step:</strong></p>" +
-          "<ol><li>Owner</li><li>Timeline</li><li>Follow-up link</li></ol>",
-      },
-    ];
-
-    state.notes = demo.map((item) => normalizeNote(item));
-    state.selectedNoteId = state.notes[0] ? state.notes[0].id : null;
-    persistNotes();
-  }
-
-  function onAddNote() {
-    const next = normalizeNote({
-      title: "Untitled note",
-      color: NOTE_COLORS[0].id,
-      content: "",
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("File read failed."));
+      reader.readAsDataURL(file);
     });
-    state.notes.unshift(next);
-    state.selectedNoteId = next.id;
-    persistNotes();
-    renderAll();
-    refs.noteTitleInput.focus();
-    refs.noteTitleInput.select();
-  }
-
-  function onClearBoard() {
-    if (!state.notes.length) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "Clear all sticky notes for this board scope? This cannot be undone."
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    state.notes = [];
-    state.selectedNoteId = null;
-    persistNotes();
-    renderAll();
-  }
-
-  function onTitleInput(event) {
-    const note = getSelectedNote();
-    if (!note) {
-      return;
-    }
-
-    note.title = event.target.value.slice(0, 120);
-    note.updatedAt = new Date().toISOString();
-    queueSave();
-    renderNotesGrid();
-    renderStats();
-  }
-
-  function onBodyInput() {
-    const note = getSelectedNote();
-    if (!note) {
-      return;
-    }
-
-    note.content = normalizeEditorHtml(refs.noteBodyInput.innerHTML);
-    note.updatedAt = new Date().toISOString();
-    queueSave();
-    renderNotesGrid();
-    renderStats();
-  }
-
-  function onEditorPaste(event) {
-    event.preventDefault();
-    const text = (event.clipboardData || window.clipboardData).getData("text");
-    document.execCommand("insertText", false, text);
-  }
-
-  function onTogglePinFromEditor() {
-    const note = getSelectedNote();
-    if (!note) {
-      return;
-    }
-
-    note.pinned = !note.pinned;
-    note.updatedAt = new Date().toISOString();
-    persistNotes();
-    renderAll();
-  }
-
-  function onDeleteFromEditor() {
-    const note = getSelectedNote();
-    if (!note) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      'Delete note "' + (note.title || "Untitled note") + '"?'
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    state.notes = state.notes.filter((item) => item.id !== note.id);
-    const visible = getVisibleNotes();
-    state.selectedNoteId = visible[0] ? visible[0].id : null;
-    persistNotes();
-    renderAll();
-  }
-
-  function onColorSwatchClick(event) {
-    const button = event.target.closest(".color-swatch");
-    if (!button) {
-      return;
-    }
-
-    const nextColor = button.getAttribute("data-color");
-    const note = getSelectedNote();
-    if (!note || !nextColor) {
-      return;
-    }
-
-    note.color = nextColor;
-    note.updatedAt = new Date().toISOString();
-    persistNotes();
-    renderAll();
-  }
-
-  function executeFormattingCommand(command) {
-    refs.noteBodyInput.focus();
-    const worked = document.execCommand(command, false, null);
-    if (worked === false) {
-      setSaveState("Formatting command not supported in this browser");
-      return;
-    }
-    refs.noteBodyInput.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   function renderAll() {
-    renderNotesGrid();
-    renderEditor();
-    renderStats();
+    renderVisibilitySummary();
+    renderInvoiceStats();
+    renderInvoiceList();
+    renderViewer();
+    renderLogs();
   }
 
-  function renderStats() {
-    const total = state.notes.length;
-    const pinned = state.notes.filter((note) => note.pinned).length;
-    const visible = getVisibleNotes().length;
-
-    refs.boardStats.textContent =
-      visible +
-      " visible / " +
-      total +
-      " total notes (" +
-      pinned +
-      " pinned)";
-  }
-
-  function renderNotesGrid() {
-    const notes = getVisibleNotes();
-    refs.notesGrid.innerHTML = "";
-
-    if (!notes.length) {
-      refs.notesEmptyState.classList.remove("hidden");
+  function renderVisibilitySummary() {
+    if (state.access.isAdmin) {
+      refs.visibilitySummary.textContent =
+        "Admin access: all imported invoices are visible.";
       return;
     }
 
-    refs.notesEmptyState.classList.add("hidden");
+    if (state.access.email) {
+      refs.visibilitySummary.textContent =
+        "Restricted access: only invoices where PM email = " +
+        state.access.email +
+        " are visible.";
+      return;
+    }
 
-    notes.forEach((note, index) => {
-      const card = document.createElement("article");
-      card.className = "note-card note-color-" + note.color;
-      if (note.id === state.selectedNoteId) {
-        card.classList.add("selected");
+    refs.visibilitySummary.textContent =
+      "Restricted access: sign-in email not detected, so no invoices are visible.";
+  }
+
+  function renderInvoiceStats() {
+    const visible = getVisibleInvoices().length;
+    const total = state.invoices.length;
+    refs.invoiceStats.textContent = visible + " visible / " + total + " total";
+  }
+
+  function renderInvoiceList() {
+    const visible = getVisibleInvoices();
+    refs.invoiceList.innerHTML = "";
+
+    if (!visible.length) {
+      refs.invoiceEmptyState.classList.remove("hidden");
+      return;
+    }
+    refs.invoiceEmptyState.classList.add("hidden");
+
+    visible.forEach((invoice) => {
+      const item = document.createElement("article");
+      item.className = "invoice-item";
+      if (invoice.id === state.selectedInvoiceId) {
+        item.classList.add("selected");
       }
-      card.style.setProperty("--tilt", tiltFor(note.id, index) + "deg");
-      card.setAttribute("tabindex", "0");
-      card.setAttribute("role", "button");
-      card.setAttribute("aria-label", "Open note " + (note.title || "Untitled"));
+      item.setAttribute("role", "button");
+      item.setAttribute("tabindex", "0");
+      item.setAttribute("aria-label", "Open invoice " + invoice.title);
 
-      card.addEventListener("click", () => {
-        state.selectedNoteId = note.id;
-        renderAll();
+      const title = document.createElement("p");
+      title.className = "invoice-item-title";
+      title.textContent = invoice.title;
+
+      const meta = document.createElement("p");
+      meta.className = "invoice-item-meta";
+      meta.textContent =
+        "Project: " +
+        invoice.projectName +
+        " | PM: " +
+        invoice.projectManagerEmail +
+        " | Uploaded " +
+        formatTime(invoice.uploadedAt);
+
+      item.appendChild(title);
+      item.appendChild(meta);
+
+      item.addEventListener("click", () => {
+        state.selectedInvoiceId = invoice.id;
+        renderInvoiceList();
+        renderViewer();
       });
-
-      card.addEventListener("keydown", (event) => {
+      item.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          state.selectedNoteId = note.id;
-          renderAll();
+          state.selectedInvoiceId = invoice.id;
+          renderInvoiceList();
+          renderViewer();
         }
       });
 
-      const header = document.createElement("div");
-      header.className = "note-header";
-
-      const title = document.createElement("p");
-      title.className = "note-title";
-      title.textContent = note.title || "Untitled note";
-      header.appendChild(title);
-
-      if (note.pinned) {
-        const pin = document.createElement("span");
-        pin.className = "pin-chip";
-        pin.textContent = "Pinned";
-        header.appendChild(pin);
-      }
-
-      const preview = document.createElement("p");
-      preview.className = "note-preview";
-      preview.textContent = summarize(note.content, 170);
-
-      const meta = document.createElement("p");
-      meta.className = "note-meta";
-      meta.textContent = "Updated " + formatTime(note.updatedAt);
-
-      card.appendChild(header);
-      card.appendChild(preview);
-      card.appendChild(meta);
-      refs.notesGrid.appendChild(card);
+      refs.invoiceList.appendChild(item);
     });
   }
 
-  function renderEditor() {
-    const note = getSelectedNote();
-
-    if (!note) {
-      refs.editorPanel.classList.add("hidden");
-      refs.editorEmptyState.classList.remove("hidden");
+  function renderViewer() {
+    const invoice = getSelectedVisibleInvoice();
+    if (!invoice) {
+      refs.viewerPanel.classList.add("hidden");
+      refs.viewerEmptyState.classList.remove("hidden");
+      refs.pdfViewerFrame.removeAttribute("src");
       return;
     }
 
-    refs.editorEmptyState.classList.add("hidden");
-    refs.editorPanel.classList.remove("hidden");
+    refs.viewerEmptyState.classList.add("hidden");
+    refs.viewerPanel.classList.remove("hidden");
+    refs.viewerTitle.textContent = invoice.title;
+    refs.viewerMeta.textContent =
+      "File: " +
+      invoice.fileName +
+      " | Project: " +
+      invoice.projectName +
+      " | PM: " +
+      invoice.projectManagerEmail +
+      " | Uploaded by: " +
+      (invoice.uploadedByEmail || "Unknown") +
+      " | Size: " +
+      formatBytes(invoice.sizeBytes);
 
-    if (refs.noteTitleInput.value !== note.title) {
-      refs.noteTitleInput.value = note.title;
+    if (refs.pdfViewerFrame.getAttribute("src") !== invoice.pdfDataUrl) {
+      refs.pdfViewerFrame.setAttribute("src", invoice.pdfDataUrl);
     }
-
-    if (document.activeElement !== refs.noteBodyInput) {
-      refs.noteBodyInput.innerHTML = note.content || "";
-    }
-
-    refs.pinNoteButton.textContent = note.pinned ? "Unpin" : "Pin";
-    renderColorPickerSelection(note.color);
-    setSaveState("Saved");
   }
 
-  function buildColorPicker() {
-    refs.colorPicker.innerHTML = "";
-    NOTE_COLORS.forEach((color) => {
-      const swatch = document.createElement("button");
-      swatch.type = "button";
-      swatch.className = "color-swatch";
-      swatch.style.background = color.hex;
-      swatch.setAttribute("data-color", color.id);
-      swatch.setAttribute("title", color.label);
-      swatch.setAttribute("aria-label", "Set color " + color.label);
-      refs.colorPicker.appendChild(swatch);
+  function onOpenInNewTab() {
+    const invoice = getSelectedVisibleInvoice();
+    if (!invoice) {
+      return;
+    }
+
+    try {
+      window.open(invoice.pdfDataUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      appendLog(
+        "VIEWER_OPEN_FAILED",
+        "Could not open selected invoice in a new tab.",
+        error
+      );
+    }
+  }
+
+  function renderDetectedEmails() {
+    refs.detectedEmails.innerHTML = "";
+    if (!state.detectedEmails.length) {
+      const empty = document.createElement("span");
+      empty.className = "chip";
+      empty.textContent = "No emails detected yet";
+      refs.detectedEmails.appendChild(empty);
+      return;
+    }
+
+    state.detectedEmails.forEach((email) => {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = email;
+      refs.detectedEmails.appendChild(chip);
     });
   }
 
-  function renderColorPickerSelection(colorId) {
-    refs.colorPicker.querySelectorAll(".color-swatch").forEach((swatch) => {
-      const isSelected = swatch.getAttribute("data-color") === colorId;
-      swatch.classList.toggle("selected", isSelected);
-    });
-  }
-
-  function getVisibleNotes() {
-    const search = state.searchQuery.toLowerCase();
-    let notes = state.notes.slice();
-
-    if (state.filter === "pinned") {
-      notes = notes.filter((note) => note.pinned);
+  function renderLogs() {
+    if (!state.access.isAdmin) {
+      refs.logsList.innerHTML = "";
+      refs.logsEmptyState.classList.add("hidden");
+      return;
     }
 
-    const sorted = notes.sort((a, b) => {
-      if (state.filter !== "recent" && a.pinned !== b.pinned) {
-        return a.pinned ? -1 : 1;
+    refs.logsList.innerHTML = "";
+    if (!state.logs.length) {
+      refs.logsEmptyState.classList.remove("hidden");
+      return;
+    }
+    refs.logsEmptyState.classList.add("hidden");
+
+    state.logs.forEach((entry) => {
+      const item = document.createElement("article");
+      item.className = "log-item";
+
+      const header = document.createElement("div");
+      header.className = "log-item-header";
+
+      const code = document.createElement("span");
+      code.className = "log-code";
+      code.textContent = entry.code;
+
+      const time = document.createElement("span");
+      time.className = "log-time";
+      time.textContent = formatTime(entry.createdAt);
+
+      header.appendChild(code);
+      header.appendChild(time);
+
+      const message = document.createElement("p");
+      message.className = "log-message";
+      message.textContent = entry.message;
+
+      const suggestion = document.createElement("p");
+      suggestion.className = "log-suggestion";
+      suggestion.textContent = "Suggested fix: " + entry.suggestion;
+
+      item.appendChild(header);
+      item.appendChild(message);
+      if (entry.details) {
+        const detail = document.createElement("p");
+        detail.className = "log-suggestion";
+        detail.textContent = "Details: " + entry.details;
+        item.appendChild(detail);
       }
-      return timestampValue(b.updatedAt) - timestampValue(a.updatedAt);
+      item.appendChild(suggestion);
+      refs.logsList.appendChild(item);
     });
+  }
 
-    if (!search) {
-      return sorted;
+  function onClearLogs() {
+    if (!state.access.isAdmin || !state.logs.length) {
+      return;
     }
 
-    return sorted.filter((note) => {
-      const haystack = (note.title + " " + stripHtml(note.content)).toLowerCase();
-      return haystack.includes(search);
+    const confirmed = window.confirm("Clear all diagnostic logs?");
+    if (!confirmed) {
+      return;
+    }
+
+    state.logs = [];
+    persistLogs();
+    renderLogs();
+  }
+
+  function getVisibleInvoices() {
+    const query = state.searchQuery;
+    let invoices = state.invoices.slice();
+
+    if (!state.access.isAdmin) {
+      const currentEmail = state.access.email;
+      if (!currentEmail) {
+        return [];
+      }
+      invoices = invoices.filter(
+        (invoice) => normalizeEmail(invoice.projectManagerEmail) === currentEmail
+      );
+    }
+
+    invoices.sort((a, b) => timestampValue(b.uploadedAt) - timestampValue(a.uploadedAt));
+
+    if (!query) {
+      return invoices;
+    }
+
+    return invoices.filter((invoice) => {
+      const haystack = (
+        invoice.title +
+        " " +
+        invoice.fileName +
+        " " +
+        invoice.projectName +
+        " " +
+        invoice.projectManagerEmail +
+        " " +
+        invoice.detectedEmails.join(" ")
+      ).toLowerCase();
+      return haystack.includes(query);
     });
   }
 
-  function getSelectedNote() {
-    return state.notes.find((note) => note.id === state.selectedNoteId) || null;
+  function ensureSelectedInvoice() {
+    const visible = getVisibleInvoices();
+    if (!visible.length) {
+      state.selectedInvoiceId = null;
+      return;
+    }
+
+    const hasSelected = visible.some((item) => item.id === state.selectedInvoiceId);
+    if (!hasSelected) {
+      state.selectedInvoiceId = visible[0].id;
+    }
   }
 
-  function normalizeNote(note) {
-    const createdAt = note && note.createdAt ? note.createdAt : new Date().toISOString();
-    const updatedAt = note && note.updatedAt ? note.updatedAt : createdAt;
+  function getSelectedVisibleInvoice() {
+    const visible = getVisibleInvoices();
+    return visible.find((item) => item.id === state.selectedInvoiceId) || null;
+  }
+
+  function deriveAccessProfile(rawUser, context) {
+    const displayName =
+      pickFirst(
+        rawUser &&
+          (rawUser.name || rawUser.fullName || rawUser.displayName || rawUser.email)
+      ) || context.userName;
+    const email = normalizeEmail(extractPrimaryEmail(rawUser) || context.userEmail || "");
+    const role = inferRole(rawUser, context.userRole);
+    const isAdmin = role === "admin";
+    const roleLabel =
+      role === "admin"
+        ? "Admin"
+        : role === "collaborator"
+          ? "Collaborator"
+          : role === "expert_advisor"
+            ? "Expert Advisor"
+            : "Restricted";
 
     return {
-      id: (note && note.id) || createId(),
-      title: (note && String(note.title || "").trim()) || "Untitled note",
-      content: normalizeEditorHtml((note && note.content) || ""),
-      color: resolveColor((note && note.color) || NOTE_COLORS[0].id),
-      pinned: Boolean(note && note.pinned),
-      createdAt,
-      updatedAt,
+      role,
+      roleLabel,
+      isAdmin,
+      email,
+      displayName,
+      canImport: isAdmin || Boolean(email),
     };
   }
 
-  function resolveColor(colorId) {
-    return NOTE_COLORS.some((item) => item.id === colorId)
-      ? colorId
-      : NOTE_COLORS[0].id;
-  }
-
-  function createId() {
-    if (window.crypto && typeof window.crypto.randomUUID === "function") {
-      return window.crypto.randomUUID();
+  function inferRole(user, fallbackRole) {
+    const normalizedFallback = normalizeRole(fallbackRole);
+    if (normalizedFallback) {
+      return normalizedFallback;
     }
 
-    return (
-      "note-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16)
-    );
+    if (!user || typeof user !== "object") {
+      return "non_admin";
+    }
+
+    if (user.isAdmin === true || user.admin === true) {
+      return "admin";
+    }
+
+    const tokens = [];
+    collectRoleTokens(user, tokens, 0);
+    const haystack = tokens.join(" ").toLowerCase();
+
+    if (/(^|\b)admin(istrator)?(\b|$)/.test(haystack)) {
+      return "admin";
+    }
+    if (/expert[\s_-]*advisor/.test(haystack)) {
+      return "expert_advisor";
+    }
+    if (/(^|\b)collaborator(\b|$)/.test(haystack)) {
+      return "collaborator";
+    }
+
+    return "non_admin";
   }
 
-  function normalizeEditorHtml(html) {
-    const cleaned = String(html || "").replace(/^\s+|\s+$/g, "");
-    if (!cleaned || cleaned === "<br>" || cleaned === "<div><br></div>") {
+  function collectRoleTokens(value, target, depth) {
+    if (depth > 6 || value == null) {
+      return;
+    }
+
+    if (typeof value === "string" || typeof value === "number") {
+      target.push(String(value));
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectRoleTokens(item, target, depth + 1));
+      return;
+    }
+
+    if (typeof value !== "object") {
+      return;
+    }
+
+    Object.keys(value).forEach((key) => {
+      const lowerKey = key.toLowerCase();
+      const nestedValue = value[key];
+      if (
+        lowerKey.includes("role") ||
+        lowerKey.includes("permission") ||
+        lowerKey.includes("type") ||
+        lowerKey.includes("group")
+      ) {
+        collectRoleTokens(nestedValue, target, depth + 1);
+      }
+    });
+  }
+
+  function extractPrimaryEmail(user) {
+    if (!user || typeof user !== "object") {
       return "";
     }
-    return cleaned;
+
+    const candidates = [];
+    collectEmailsFromObject(user, candidates, 0);
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const email = normalizeEmail(candidates[i]);
+      if (isValidEmail(email)) {
+        return email;
+      }
+    }
+
+    return "";
   }
 
-  function summarize(html, maxLength) {
-    const text = stripHtml(html).replace(/\s+/g, " ").trim();
+  function collectEmailsFromObject(value, target, depth) {
+    if (depth > 6 || value == null) {
+      return;
+    }
+
+    if (typeof value === "string") {
+      if (isValidEmail(value.trim())) {
+        target.push(value.trim());
+      }
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectEmailsFromObject(item, target, depth + 1));
+      return;
+    }
+
+    if (typeof value !== "object") {
+      return;
+    }
+
+    Object.keys(value).forEach((key) => {
+      const nestedValue = value[key];
+      if (String(key).toLowerCase().includes("email")) {
+        if (typeof nestedValue === "string") {
+          target.push(nestedValue);
+        } else {
+          collectEmailsFromObject(nestedValue, target, depth + 1);
+        }
+      }
+    });
+  }
+
+  function normalizeRole(value) {
+    const text = String(value || "").trim().toLowerCase();
     if (!text) {
-      return "No content yet.";
+      return "";
     }
-    return text.length > maxLength ? text.slice(0, maxLength - 1) + "…" : text;
+    if (text.includes("admin")) {
+      return "admin";
+    }
+    if (text.includes("expert") && text.includes("advisor")) {
+      return "expert_advisor";
+    }
+    if (text.includes("collaborator")) {
+      return "collaborator";
+    }
+    return "";
   }
 
-  function stripHtml(html) {
-    const container = document.createElement("div");
-    container.innerHTML = html || "";
-    return container.textContent || container.innerText || "";
+  function normalizeInvoice(invoice) {
+    if (!invoice || typeof invoice !== "object") {
+      return null;
+    }
+
+    const projectManagerEmail = normalizeEmail(invoice.projectManagerEmail);
+    const pdfDataUrl = String(invoice.pdfDataUrl || "");
+    if (!projectManagerEmail || !pdfDataUrl) {
+      return null;
+    }
+
+    const detected = Array.isArray(invoice.detectedEmails)
+      ? invoice.detectedEmails.map(normalizeEmail).filter(isValidEmail)
+      : [];
+
+    return {
+      id: String(invoice.id || createId()),
+      title: String(invoice.title || invoice.fileName || "Untitled invoice").trim(),
+      fileName: String(invoice.fileName || "invoice.pdf").trim(),
+      projectName: String(invoice.projectName || "Unspecified project").trim(),
+      projectId: String(invoice.projectId || "").trim(),
+      projectManagerEmail,
+      detectedEmails: dedupeEmails(detected),
+      uploadedByEmail: normalizeEmail(invoice.uploadedByEmail),
+      uploadedByName: String(invoice.uploadedByName || "").trim(),
+      uploadedAt: String(invoice.uploadedAt || new Date().toISOString()),
+      sizeBytes: Number(invoice.sizeBytes || 0),
+      mimeType: String(invoice.mimeType || "application/pdf"),
+      pdfDataUrl,
+    };
   }
 
-  function tiltFor(id, index) {
-    let hash = 0;
-    const source = String(id) + ":" + String(index);
-    for (let i = 0; i < source.length; i += 1) {
-      hash = (hash << 5) - hash + source.charCodeAt(i);
-      hash |= 0;
+  function normalizeLog(entry) {
+    if (!entry || typeof entry !== "object") {
+      return null;
     }
-    const raw = ((Math.abs(hash) % 8) - 4) * 0.55;
-    return raw.toFixed(2);
+    return {
+      id: String(entry.id || createId()),
+      createdAt: String(entry.createdAt || new Date().toISOString()),
+      code: String(entry.code || "UNKNOWN"),
+      message: String(entry.message || "Unexpected app event."),
+      details: String(entry.details || ""),
+      suggestion: String(entry.suggestion || "Review app configuration and retry."),
+    };
+  }
+
+  function dedupeEmails(values) {
+    const seen = new Set();
+    const result = [];
+    values.forEach((value) => {
+      const email = normalizeEmail(value);
+      if (!isValidEmail(email) || seen.has(email)) {
+        return;
+      }
+      seen.add(email);
+      result.push(email);
+    });
+    return result;
+  }
+
+  function isPdfFile(file) {
+    if (!file) {
+      return false;
+    }
+    const type = String(file.type || "").toLowerCase();
+    const name = String(file.name || "").toLowerCase();
+    return type.includes("pdf") || name.endsWith(".pdf");
+  }
+
+  function normalizeEmail(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function isValidEmail(value) {
+    return EMAIL_VALIDATION_PATTERN.test(String(value || "").trim());
+  }
+
+  function safeStorageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      appendLog("STORAGE_READ_FAILED", "Unable to read from browser storage.", error);
+      return null;
+    }
+  }
+
+  function safeStorageSet(key, value) {
+    window.localStorage.setItem(key, value);
+  }
+
+  function simplifyError(error) {
+    if (!error) {
+      return "";
+    }
+    if (typeof error === "string") {
+      return error.slice(0, 240);
+    }
+    if (error && typeof error.message === "string") {
+      return error.message.slice(0, 240);
+    }
+    try {
+      return JSON.stringify(error).slice(0, 240);
+    } catch (_error) {
+      return "Unknown error object";
+    }
   }
 
   function formatTime(isoString) {
-    if (!isoString) {
+    const value = new Date(isoString).getTime();
+    if (Number.isNaN(value)) {
       return "just now";
     }
-    const date = new Date(isoString);
-    if (Number.isNaN(date.getTime())) {
-      return "just now";
-    }
-    return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return new Date(value).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   function timestampValue(isoString) {
@@ -716,26 +1320,43 @@
     return Number.isNaN(value) ? 0 : value;
   }
 
-  function shouldSeedDemo(query) {
-    const value = query.get("demo");
-    return value === "1" || value === "true";
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "0 B";
+    }
+    if (bytes < 1024) {
+      return bytes + " B";
+    }
+    if (bytes < 1024 * 1024) {
+      return (bytes / 1024).toFixed(1) + " KB";
+    }
+    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   }
 
   function slug(value) {
-    return String(value || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "") || "default";
+    return (
+      String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "") || "default"
+    );
   }
 
   function pickFirst(value) {
     if (typeof value === "string") {
-      const trimmed = value.trim();
-      return trimmed || "";
+      return value.trim();
     }
     if (typeof value === "number") {
       return String(value);
     }
     return "";
+  }
+
+  function createId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    return "id-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
   }
 })();

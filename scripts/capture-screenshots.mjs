@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
@@ -11,7 +12,9 @@ const screenshotDir = path.join(rootDir, "docs", "screenshots");
 const appUrl =
   "file://" +
   appFile +
-  "?demo=1&account=Acme%20Implementation%20Team&project=Customer%20Home";
+  "?account=Acme%20Implementation%20Team&project=Customer%20Portal%20Onboarding&email=admin%40acme.com&role=admin";
+
+await fs.mkdir(screenshotDir, { recursive: true });
 
 const browser = await chromium.launch({
   headless: true,
@@ -25,20 +28,15 @@ await page.goto(appUrl);
 await page.waitForTimeout(700);
 
 await page.screenshot({
-  path: path.join(screenshotDir, "bulletin-board-overview.png"),
+  path: path.join(screenshotDir, "invoice-access-overview.png"),
   fullPage: true,
 });
 
-const secondCard = page.locator(".note-card").nth(1);
-if ((await secondCard.count()) > 0) {
-  await secondCard.click();
-}
-
-await page.locator("#noteBodyInput").click();
+await page.locator("#tabLogsButton").click();
 await page.waitForTimeout(250);
 
 await page.screenshot({
-  path: path.join(screenshotDir, "bulletin-board-lists-and-formatting.png"),
+  path: path.join(screenshotDir, "invoice-access-admin-diagnostics.png"),
   fullPage: true,
 });
 

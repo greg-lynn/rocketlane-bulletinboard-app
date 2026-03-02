@@ -1,10 +1,10 @@
 const widgets = [
   {
-    identifier: "customer-home-bulletin-board",
+    identifier: "invoice-access-manager",
     location: ["customer_portal_widget", "left_nav"],
-    name: "Customer Bulletin Board",
+    name: "Invoice Access Manager",
     description:
-      "Sticky-note bulletin board for customer updates and collaboration.",
+      "Import PDF invoices with role-based visibility for admins and PM-aligned collaborators.",
     icon: "dist/icon.svg",
     entrypoint: {
       html: "dist/index.html",

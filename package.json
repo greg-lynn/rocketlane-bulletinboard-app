@@ -1,8 +1,8 @@
 {
-  "name": "rocketlane-bulletin-board-app",
+  "name": "rocketlane-invoice-access-manager-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Sticky Notes-inspired Rocketlane custom app for customer bulletin boards.",
+  "description": "Rocketlane custom app for PDF invoice imports with role-based access controls.",
   "scripts": {
     "check:js": "node --check dist/app.js && node --check index.js",
     "package:zip": "bash scripts/package-app.sh",

@@ -95,33 +95,13 @@
     state.storageKey = createLogsStorageKey(runtime.context);
     loadLogs();
 
-    if (runtime.connected) {
-      const apiUser = await fetchCurrentUserProfile();
-      if (apiUser && typeof apiUser === "object") {
-        state.rawUser = mergeObjects(state.rawUser, apiUser);
-      }
-
-      try {
-        state.teamMembers = await fetchTeamMembers();
-      } catch (error) {
-        appendLog(
-          "PERMISSION_FETCH_FAILED",
-          "Unable to fetch team members for permission-set resolution.",
-          error
-        );
-      }
-    }
-
-    const permissionHint = resolveCurrentUserPermission(
-      state.teamMembers,
-      state.rawUser,
-      runtime.context
-    );
+    const permissionHint = await fetchPermissionHintFromSdk();
     state.access = deriveAccessProfile(
       state.rawUser,
       state.rawAccount,
       runtime.context,
-      permissionHint
+      permissionHint,
+      runtime.connected
     );
 
     updateHeader();
@@ -454,40 +434,113 @@
     };
   }
 
-  async function fetchCurrentUserProfile() {
-    const endpoints = ["/api/1.0/users/me", "/api/1.0/me", "/api/1.0/users/current"];
-    for (let i = 0; i < endpoints.length; i += 1) {
-      try {
-        const payload = await requestJson(endpoints[i]);
-        if (payload && typeof payload === "object") {
-          if (payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)) {
-            return payload.data;
-          }
-          return payload;
+  async function fetchPermissionHintFromSdk() {
+    if (!state.connected || !state.client || !state.client.data) {
+      return null;
+    }
+
+    const direct = normalizeTeamMemberFromAny(state.rawUser);
+    if (direct && direct.permission) {
+      return direct;
+    }
+
+    try {
+      state.teamMembers = await fetchTeamMembersFromSdk(state.client);
+    } catch (error) {
+      appendLog(
+        "PERMISSION_FETCH_FAILED",
+        "Unable to fetch team members via SDK data identifiers.",
+        error
+      );
+      state.teamMembers = [];
+    }
+
+    return resolveCurrentUserPermission(
+      state.teamMembers,
+      state.rawUser,
+      state.context
+    );
+  }
+
+  async function fetchTeamMembersFromSdk(client) {
+    const members = [];
+    const seen = new Set();
+
+    const addMembersFromPayload = (payload) => {
+      const rows = extractCollection(payload, [
+        "users",
+        "members",
+        "teamMembers",
+        "accountUsers",
+        "account_users",
+        "data",
+        "items",
+        "results",
+      ]);
+      rows.forEach((row) => {
+        const normalized = normalizeTeamMemberFromAny(row);
+        if (!normalized) {
+          return;
         }
-      } catch (_error) {
-        // Try next endpoint.
+        const key = normalized.email || normalized.id;
+        if (!key || seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        members.push(normalized);
+      });
+    };
+
+    const directCandidates = [
+      "users",
+      "members",
+      "teamMembers",
+      "accountUsers",
+      "account_users",
+      "allUsers",
+      "all_users",
+    ];
+    for (let i = 0; i < directCandidates.length; i += 1) {
+      const payload = await invokeSdkDataGet(client, directCandidates[i]);
+      if (payload) {
+        addMembersFromPayload(payload);
       }
     }
-    return null;
+
+    const identifiers = (client.data && client.data.dataIdentifiers) || {};
+    const identifierKeys = Object.keys(identifiers).filter((key) => {
+      const upper = key.toUpperCase();
+      return (
+        (upper.includes("USER") || upper.includes("MEMBER") || upper.includes("TEAM")) &&
+        !upper.includes("CURRENT_PROJECT") &&
+        !upper.includes("GET_PROJECT")
+      );
+    });
+
+    for (let i = 0; i < identifierKeys.length; i += 1) {
+      const key = identifiers[identifierKeys[i]];
+      const payload = await invokeSdkDataGet(client, key);
+      if (payload) {
+        addMembersFromPayload(payload);
+      }
+    }
+
+    return members;
   }
 
-  async function fetchTeamMembers() {
-    const members = await requestCollection(
-      [
-        "/api/1.0/users?size=500",
-        "/api/1.0/users?limit=500",
-        "/api/1.0/users",
-        "/api/1.0/account-users?size=500",
-        "/api/1.0/accountUsers?size=500",
-      ],
-      ["users", "members", "teamMembers", "data", "content", "results", "items"]
-    );
-
-    return members.map(normalizeTeamMember).filter(Boolean);
+  async function invokeSdkDataGet(client, key) {
+    const value = String(key || "").trim();
+    if (!value || !client || !client.data || typeof client.data.get !== "function") {
+      return null;
+    }
+    try {
+      return await client.data.get(value);
+    } catch (_error) {
+      return null;
+    }
   }
 
-  function normalizeTeamMember(raw) {
+  function normalizeTeamMemberFromAny(raw) {
     if (!raw || typeof raw !== "object") {
       return null;
     }
@@ -623,6 +676,23 @@
       projects.push(runtimeProject);
     }
 
+    const sdkProjects = await fetchProjectsFromSdk();
+    sdkProjects.forEach((record) => {
+      const project = normalizeProjectRecord(record);
+      if (!project) {
+        return;
+      }
+      if (!SOURCE_PROJECT_NAMES.includes(project.name.toLowerCase())) {
+        return;
+      }
+      const key = project.id || project.name.toLowerCase();
+      if (byKey.has(key)) {
+        return;
+      }
+      byKey.add(key);
+      projects.push(project);
+    });
+
     const payload = await requestCollection(
       [
         "/api/1.0/projects?size=200",
@@ -653,21 +723,31 @@
 
   async function fetchInvoicesForProject(project) {
     const projectId = project.id;
-    if (!projectId) {
+    if (!projectId && !project.name) {
       return [];
     }
 
-    const endpoints = [
-      "/api/1.0/projects/" + encodeURIComponent(projectId) + "/documents?size=200",
-      "/api/1.0/projects/" + encodeURIComponent(projectId) + "/documents",
-      "/api/1.0/projects/" + encodeURIComponent(projectId) + "/files?size=200",
-      "/api/1.0/projects/" + encodeURIComponent(projectId) + "/files",
-      "/api/1.0/documents?projectId=" + encodeURIComponent(projectId) + "&size=200",
-      "/api/1.0/files?projectId=" + encodeURIComponent(projectId) + "&size=200",
-      "/api/1.0/tasks?projectId=" + encodeURIComponent(projectId) + "&size=200",
-    ];
+    const records = [];
+    if (project.raw && typeof project.raw === "object") {
+      records.push(project.raw);
+    }
+    const sdkArtifacts = await fetchProjectArtifactsFromSdk(project);
+    records.push(...sdkArtifacts);
 
-    const records = await requestCollection(endpoints, [
+    const endpoints = [];
+    if (projectId) {
+      endpoints.push(
+        "/api/1.0/projects/" + encodeURIComponent(projectId) + "/documents?size=200",
+        "/api/1.0/projects/" + encodeURIComponent(projectId) + "/documents",
+        "/api/1.0/projects/" + encodeURIComponent(projectId) + "/files?size=200",
+        "/api/1.0/projects/" + encodeURIComponent(projectId) + "/files",
+        "/api/1.0/documents?projectId=" + encodeURIComponent(projectId) + "&size=200",
+        "/api/1.0/files?projectId=" + encodeURIComponent(projectId) + "&size=200",
+        "/api/1.0/tasks?projectId=" + encodeURIComponent(projectId) + "&size=200"
+      );
+    }
+
+    const apiRecords = await requestCollection(endpoints, [
       "documents",
       "files",
       "tasks",
@@ -676,6 +756,7 @@
       "results",
       "items",
     ]);
+    records.push(...apiRecords);
 
     const invoices = [];
     for (let i = 0; i < records.length; i += 1) {
@@ -700,7 +781,129 @@
     return invoices;
   }
 
+  async function fetchProjectsFromSdk() {
+    if (!state.client || !state.client.data) {
+      return [];
+    }
+
+    const records = [];
+    const seen = new Set();
+    const addRows = (payload) => {
+      const rows = extractCollection(payload, [
+        "projects",
+        "data",
+        "content",
+        "results",
+        "items",
+      ]);
+      rows.forEach((row) => {
+        const key = buildRowKey(row);
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        records.push(row);
+      });
+    };
+
+    const directCandidates = ["projects", "projectList", "allProjects"];
+    for (let i = 0; i < directCandidates.length; i += 1) {
+      const payload = await invokeSdkDataGet(state.client, directCandidates[i]);
+      if (payload) {
+        addRows(payload);
+      }
+    }
+
+    const identifiers = (state.client.data && state.client.data.dataIdentifiers) || {};
+    const keys = Object.keys(identifiers).filter((key) => {
+      const upper = key.toUpperCase();
+      return (
+        upper.includes("PROJECT") &&
+        !upper.includes("CURRENT_PROJECT") &&
+        (upper.includes("PROJECTS") ||
+          upper.includes("ALL") ||
+          upper.includes("LIST") ||
+          upper.includes("SEARCH"))
+      );
+    });
+
+    for (let i = 0; i < keys.length; i += 1) {
+      const payload = await invokeSdkDataGet(state.client, identifiers[keys[i]]);
+      if (payload) {
+        addRows(payload);
+      }
+    }
+
+    return records;
+  }
+
+  async function fetchProjectArtifactsFromSdk(project) {
+    if (!state.client || !state.client.data) {
+      return [];
+    }
+
+    const records = [];
+    const seen = new Set();
+    const addRows = (payload) => {
+      const rows = extractCollection(payload, [
+        "documents",
+        "files",
+        "tasks",
+        "invoices",
+        "attachments",
+        "data",
+        "content",
+        "results",
+        "items",
+      ]);
+      rows.forEach((row) => {
+        if (!matchesProject(row, project)) {
+          return;
+        }
+        const key = buildRowKey(row);
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        records.push(row);
+      });
+    };
+
+    const directCandidates = ["documents", "files", "attachments", "tasks", "invoices"];
+    for (let i = 0; i < directCandidates.length; i += 1) {
+      const payload = await invokeSdkDataGet(state.client, directCandidates[i]);
+      if (payload) {
+        addRows(payload);
+      }
+    }
+
+    const identifiers = (state.client.data && state.client.data.dataIdentifiers) || {};
+    const keys = Object.keys(identifiers).filter((key) => {
+      const upper = key.toUpperCase();
+      const hasAsset =
+        upper.includes("DOCUMENT") ||
+        upper.includes("FILE") ||
+        upper.includes("ATTACHMENT") ||
+        upper.includes("INVOICE") ||
+        upper.includes("TASK");
+      return hasAsset && !upper.includes("CURRENT_USER");
+    });
+
+    for (let i = 0; i < keys.length; i += 1) {
+      const payload = await invokeSdkDataGet(state.client, identifiers[keys[i]]);
+      if (payload) {
+        addRows(payload);
+      }
+    }
+
+    return records;
+  }
+
   async function requestCollection(endpoints, preferredKeys) {
+    if (!canUseDirectApiFetch()) {
+      return [];
+    }
+
     const collected = [];
     const seen = new Set();
 
@@ -722,6 +925,46 @@
     }
 
     return collected;
+  }
+
+  function canUseDirectApiFetch() {
+    const origin = String((window.location && window.location.origin) || "").toLowerCase();
+    if (!origin) {
+      return false;
+    }
+    if (origin.includes("amazonaws.com") || origin.includes("cloudfront.net")) {
+      return false;
+    }
+    return origin.includes("rocketlane.com") || origin.includes("localhost");
+  }
+
+  function matchesProject(record, project) {
+    if (!record || typeof record !== "object" || !project) {
+      return false;
+    }
+
+    const targetId = String(project.id || "").toLowerCase();
+    const targetName = String(project.name || "").toLowerCase();
+    const recordProjectId = pickFirst(
+      record.projectId ||
+        record.project_id ||
+        record.parentProjectId ||
+        (record.project && (record.project.id || record.project.projectId))
+    );
+    if (targetId && recordProjectId && String(recordProjectId).toLowerCase() === targetId) {
+      return true;
+    }
+
+    const recordProjectName = pickFirst(
+      record.projectName ||
+        record.project_name ||
+        (record.project && (record.project.name || record.project.projectName))
+    );
+    if (targetName && recordProjectName) {
+      return String(recordProjectName).toLowerCase() === targetName;
+    }
+
+    return false;
   }
 
   async function requestJson(path) {
@@ -1543,7 +1786,13 @@
     renderLogs();
   }
 
-  function deriveAccessProfile(rawUser, rawAccount, context, permissionHint) {
+  function deriveAccessProfile(
+    rawUser,
+    rawAccount,
+    context,
+    permissionHint,
+    connected
+  ) {
     const displayName =
       pickFirst(
         rawUser &&
@@ -1553,8 +1802,12 @@
     const permissionRole = normalizePermissionRole(
       permissionHint && permissionHint.permission
     );
-    const role =
-      permissionRole || inferRole(rawUser, rawAccount, context.userRole);
+    const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
+    let role = permissionRole || inferredRole;
+    if (connected && role === "non_admin") {
+      // Only Collaborator/Expert Advisor should be restricted.
+      role = "admin";
+    }
     const isAdmin = role === "admin";
     const roleLabel = resolveRoleLabel(role, permissionHint);
 

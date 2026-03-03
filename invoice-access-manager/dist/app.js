@@ -100,8 +100,7 @@
       state.rawUser,
       state.rawAccount,
       runtime.context,
-      permissionHint,
-      runtime.connected
+      permissionHint
     );
 
     updateHeader();
@@ -1786,13 +1785,7 @@
     renderLogs();
   }
 
-  function deriveAccessProfile(
-    rawUser,
-    rawAccount,
-    context,
-    permissionHint,
-    connected
-  ) {
+  function deriveAccessProfile(rawUser, rawAccount, context, permissionHint) {
     const displayName =
       pickFirst(
         rawUser &&
@@ -1803,11 +1796,7 @@
       permissionHint && permissionHint.permission
     );
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
-    let role = permissionRole || inferredRole;
-    if (connected && role === "non_admin") {
-      // Only Collaborator/Expert Advisor should be restricted.
-      role = "admin";
-    }
+    const role = permissionRole || inferredRole || "non_admin";
     const isAdmin = role === "admin";
     const roleLabel = resolveRoleLabel(role, permissionHint);
 
@@ -1876,16 +1865,14 @@
     if (!text) {
       return "";
     }
-    if (text.includes("account admin") || text.includes("admin")) {
+    if (
+      text.includes("account admin") ||
+      text.includes("workspace admin") ||
+      text === "admin"
+    ) {
       return "admin";
     }
-    if (text.includes("expert") && text.includes("advisor")) {
-      return "expert_advisor";
-    }
-    if (text.includes("collaborator")) {
-      return "collaborator";
-    }
-    return "";
+    return "non_admin";
   }
 
   function collectRoleTokens(value, target, depth) {

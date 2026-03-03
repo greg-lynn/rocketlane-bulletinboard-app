@@ -7,8 +7,7 @@
   const SDK_WAIT_MS = 4500;
   const SDK_POLL_INTERVAL_MS = 120;
   const MAX_PDF_SCRUB_PAGES = 6;
-  const PDF_WORKER_CDN =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const PDF_WORKER_CDN = "./pdf.worker.min.js";
 
   const SOURCE_PROJECT_NAMES = [
     "expert advisor program invoices",

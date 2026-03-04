@@ -437,7 +437,6 @@
       "currentAccount",
       "workspace",
       "organization",
-      "company",
     ]);
     if (!candidate) {
       return null;
@@ -470,23 +469,38 @@
       return fromArray ? asPlainObject(fromArray) : null;
     }
 
-    const payloadData = direct.data;
-    if (payloadData && !Array.isArray(payloadData)) {
-      const asObject = asPlainObject(payloadData);
+    const candidates = [
+      direct.response,
+      direct.data,
+      direct.payload,
+      direct.result,
+      direct.item,
+      direct,
+    ];
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      const asObject = asPlainObject(candidate);
       if (asObject) {
         const nested = pickNestedEntity(asObject, preferredKeys);
-        return nested || asObject;
+        if (nested) {
+          return nested;
+        }
+        if (asObject !== direct) {
+          return asObject;
+        }
+        continue;
       }
-    }
-    if (Array.isArray(payloadData)) {
-      const fromData = selectCurrentUserFromCollection(payloadData);
-      if (fromData) {
-        return fromData;
+
+      if (Array.isArray(candidate)) {
+        const fromData = selectCurrentUserFromCollection(candidate);
+        if (fromData) {
+          return fromData;
+        }
       }
     }
 
-    const nested = pickNestedEntity(direct, preferredKeys);
-    return nested || direct;
+    return direct;
   }
 
   function pickNestedEntity(payload, preferredKeys) {
@@ -541,49 +555,77 @@
   }
 
   function mergeContextData(fallback, account, user, project) {
+    const accountView = unwrapTopLevelObject(account);
+    const userView = unwrapTopLevelObject(user);
+    const projectView = unwrapTopLevelObject(project);
+
     return {
       accountId:
-        pickFirst(account && (account.id || account.accountId || account._id)) ||
+        pickFirst(
+          accountView &&
+            (accountView.id ||
+              accountView.accountId ||
+              accountView._id ||
+              accountView.companyId)
+        ) ||
         fallback.accountId,
       accountName:
         pickFirst(
-          account &&
-            (account.name ||
-              account.accountName ||
-              account.displayName ||
-              account.companyName)
+          accountView &&
+            (accountView.name ||
+              accountView.accountName ||
+              accountView.displayName ||
+              accountView.companyName)
         ) || fallback.accountName,
       userId:
-        pickFirst(user && (user.id || user.userId || user._id)) || fallback.userId,
+        pickFirst(
+          userView &&
+            (userView.id || userView.userId || userView._id || userView.userID)
+        ) || fallback.userId,
       userName:
         pickFirst(
-          user && (user.name || user.fullName || user.displayName || user.email)
+          userView &&
+            (userView.name ||
+              userView.fullName ||
+              userView.displayName ||
+              userView.userName ||
+              userView.email ||
+              [
+                pickFirst(userView.firstName),
+                pickFirst(userView.lastName),
+              ]
+                .filter(Boolean)
+                .join(" "))
         ) || fallback.userName,
       userEmail:
         normalizeEmail(
           pickFirst(
-            user &&
-              (user.email ||
-                user.workEmail ||
-                user.userEmail ||
-                (user.profile && user.profile.email))
+            userView &&
+              (userView.email ||
+                userView.workEmail ||
+                userView.userEmail ||
+                userView.userName ||
+                (userView.profile && userView.profile.email))
           ) || fallback.userEmail
         ),
       userRole:
-        pickFirst(
-          user &&
-            (user.role ||
-              user.userRole ||
-              user.permissionSet ||
-              user.permissionLevel ||
-              user.userType ||
-              user.accountPermission)
-        ) || fallback.userRole,
+        extractRoleLabel(userView) ||
+        extractPermissionLabel(userView) ||
+        pickFirst(userView && userView.userType) ||
+        fallback.userRole,
       projectId:
-        pickFirst(project && (project.id || project.projectId || project._id)) ||
+        pickFirst(
+          projectView &&
+            (projectView.id || projectView.projectId || projectView._id)
+        ) ||
         fallback.projectId,
       projectName:
-        pickFirst(project && (project.name || project.projectName)) ||
+        pickFirst(
+          projectView &&
+            (projectView.name ||
+              projectView.projectName ||
+              projectView.engagementName)
+        ) ||
         fallback.projectName,
     };
   }
@@ -2059,7 +2101,14 @@
         lowered.includes("permission") ||
         lowered.includes("type") ||
         lowered.includes("group") ||
-        lowered.includes("admin")
+        lowered.includes("admin") ||
+        lowered === "response" ||
+        lowered === "data" ||
+        lowered === "payload" ||
+        lowered === "result" ||
+        lowered === "item" ||
+        lowered === "user" ||
+        lowered === "account"
       ) {
         collectRoleTokens(next, target, depth + 1);
       }
@@ -2259,6 +2308,15 @@
     if (!value || typeof value !== "object") {
       return "";
     }
+
+    const wrapped = unwrapTopLevelObject(value);
+    if (wrapped !== value) {
+      const wrappedText = readTextValue(wrapped);
+      if (wrappedText) {
+        return wrappedText;
+      }
+    }
+
     return (
       pickFirst(
         value.name ||
@@ -2276,6 +2334,7 @@
     if (!raw || typeof raw !== "object") {
       return "";
     }
+    const source = unwrapTopLevelObject(raw);
     const permissionsList = Array.isArray(raw.permissions)
       ? raw.permissions
           .map((item) => readTextValue(item))
@@ -2283,13 +2342,13 @@
           .join(", ")
       : "";
     return readTextValue(
-      raw.permission ||
-        raw.permissionName ||
-        raw.permissionSet ||
-        raw.permissionSetObj ||
-        raw.accountPermission ||
-        raw.access ||
-        raw.permissions ||
+      source.permission ||
+        source.permissionName ||
+        source.permissionSet ||
+        source.permissionSetObj ||
+        source.accountPermission ||
+        source.access ||
+        source.permissions ||
         permissionsList
     );
   }
@@ -2298,14 +2357,37 @@
     if (!raw || typeof raw !== "object") {
       return "";
     }
+    const source = unwrapTopLevelObject(raw);
     return readTextValue(
-      raw.role ||
-        raw.userRole ||
-        raw.designation ||
-        raw.title ||
-        raw.userType ||
-        raw.roleInfo
+      source.role ||
+        source.userRole ||
+        source.designation ||
+        source.title ||
+        source.userType ||
+        source.roleInfo ||
+        (source.role && source.role.roleName)
     );
+  }
+
+  function unwrapTopLevelObject(value) {
+    const source = asPlainObject(value);
+    if (!source) {
+      return value;
+    }
+    const candidates = [
+      source.response,
+      source.data,
+      source.payload,
+      source.result,
+      source.item,
+    ];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const asObject = asPlainObject(candidates[i]);
+      if (asObject) {
+        return asObject;
+      }
+    }
+    return source;
   }
 
   function updateDebugState(reason) {
@@ -2313,6 +2395,9 @@
       reason: reason || "",
       connected: state.connected,
       access: state.access,
+      inferredRoleFromRawUser: inferRole(state.rawUser, state.rawAccount, ""),
+      extractedRoleLabel: extractRoleLabel(state.rawUser),
+      extractedPermissionLabel: extractPermissionLabel(state.rawUser),
       permissionHint: state.permissionHint,
       context: state.context,
       rawUser: state.rawUser,

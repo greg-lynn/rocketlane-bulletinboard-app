@@ -1992,7 +1992,10 @@
     const tokens = [];
     collectRoleTokens(user, tokens, 0);
     collectRoleTokens(account, tokens, 0);
-    const haystack = tokens.join(" ").toLowerCase();
+    const haystack = tokens
+      .join(" ")
+      .toLowerCase()
+      .replace(/[_-]+/g, " ");
 
     if (
       /(^|\b)(account|workspace)\s*admin(istrator)?(\b|$)/.test(haystack) ||
@@ -2010,7 +2013,10 @@
   }
 
   function normalizePermissionRole(value) {
-    const text = String(value || "").trim().toLowerCase();
+    const text = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]+/g, " ");
     if (!text) {
       return "";
     }
@@ -2069,7 +2075,10 @@
   }
 
   function normalizeRole(value) {
-    const text = String(value || "").trim().toLowerCase();
+    const text = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]+/g, " ");
     if (!text) {
       return "";
     }

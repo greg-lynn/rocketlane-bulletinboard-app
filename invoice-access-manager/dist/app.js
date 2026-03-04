@@ -64,6 +64,13 @@
     },
   };
 
+  window.__invoiceAccessBuild = "role-fix-20260304c";
+  window.__invoiceAccessDebug = {
+    reason: "booting",
+    connected: false,
+    access: state.access,
+  };
+
   const refs = {};
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -77,6 +84,7 @@
         "Invoice manager initialization failed.",
         error
       );
+      updateDebugState("init-catch-error");
       renderAll();
     });
   });
@@ -309,7 +317,8 @@
       attempted.add(key);
       try {
         const value = await client.data.get(key);
-        return value != null ? value : null;
+        const normalized = normalizeRuntimeEntity(objectName, value);
+        return normalized != null ? normalized : null;
       } catch (_error) {
         return null;
       }
@@ -317,8 +326,9 @@
 
     try {
       const direct = await client.data.get(objectName);
-      if (direct != null) {
-        return direct;
+      const normalized = normalizeRuntimeEntity(objectName, direct);
+      if (normalized != null) {
+        return normalized;
       }
     } catch (_error) {
       // Continue to broader lookup candidates.
@@ -371,6 +381,149 @@
       }
     }
 
+    return null;
+  }
+
+  function normalizeRuntimeEntity(objectName, rawValue) {
+    if (rawValue == null) {
+      return null;
+    }
+
+    if (objectName === "user") {
+      return normalizeUserPayload(rawValue);
+    }
+    if (objectName === "account") {
+      return normalizeAccountPayload(rawValue);
+    }
+    if (objectName === "project") {
+      return normalizeProjectPayload(rawValue);
+    }
+
+    return rawValue;
+  }
+
+  function normalizeUserPayload(rawValue) {
+    const candidate = unwrapEntityObject(rawValue, [
+      "user",
+      "currentUser",
+      "viewer",
+      "accountUser",
+      "member",
+      "me",
+    ]);
+    if (!candidate) {
+      return null;
+    }
+    if (
+      Array.isArray(candidate.users) ||
+      Array.isArray(candidate.members) ||
+      Array.isArray(candidate.teamMembers) ||
+      Array.isArray(candidate.accountUsers)
+    ) {
+      const fromCollection = selectCurrentUserFromCollection(
+        candidate.users ||
+          candidate.members ||
+          candidate.teamMembers ||
+          candidate.accountUsers
+      );
+      return fromCollection || null;
+    }
+    return candidate;
+  }
+
+  function normalizeAccountPayload(rawValue) {
+    const candidate = unwrapEntityObject(rawValue, [
+      "account",
+      "currentAccount",
+      "workspace",
+      "organization",
+      "company",
+    ]);
+    if (!candidate) {
+      return null;
+    }
+    if (Array.isArray(candidate.accounts) || Array.isArray(candidate.workspaces)) {
+      return null;
+    }
+    return candidate;
+  }
+
+  function normalizeProjectPayload(rawValue) {
+    const candidate = unwrapEntityObject(rawValue, [
+      "project",
+      "currentProject",
+      "engagement",
+    ]);
+    if (!candidate) {
+      return null;
+    }
+    if (Array.isArray(candidate.projects)) {
+      return null;
+    }
+    return candidate;
+  }
+
+  function unwrapEntityObject(rawValue, preferredKeys) {
+    const direct = asPlainObject(rawValue);
+    if (!direct) {
+      const fromArray = selectCurrentUserFromCollection(rawValue);
+      return fromArray ? asPlainObject(fromArray) : null;
+    }
+
+    const payloadData = direct.data;
+    if (payloadData && !Array.isArray(payloadData)) {
+      const asObject = asPlainObject(payloadData);
+      if (asObject) {
+        const nested = pickNestedEntity(asObject, preferredKeys);
+        return nested || asObject;
+      }
+    }
+    if (Array.isArray(payloadData)) {
+      const fromData = selectCurrentUserFromCollection(payloadData);
+      if (fromData) {
+        return fromData;
+      }
+    }
+
+    const nested = pickNestedEntity(direct, preferredKeys);
+    return nested || direct;
+  }
+
+  function pickNestedEntity(payload, preferredKeys) {
+    for (let i = 0; i < preferredKeys.length; i += 1) {
+      const value = asPlainObject(payload[preferredKeys[i]]);
+      if (value) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  function asPlainObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    return value;
+  }
+
+  function selectCurrentUserFromCollection(collection) {
+    if (!Array.isArray(collection)) {
+      return null;
+    }
+    for (let i = 0; i < collection.length; i += 1) {
+      const candidate = collection[i];
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        continue;
+      }
+      if (
+        candidate.isCurrentUser === true ||
+        candidate.current === true ||
+        candidate.me === true ||
+        candidate.self === true
+      ) {
+        return candidate;
+      }
+    }
     return null;
   }
 

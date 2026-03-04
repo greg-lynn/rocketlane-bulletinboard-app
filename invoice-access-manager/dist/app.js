@@ -12,7 +12,6 @@
   const SOURCE_PROJECT_NAMES = [
     "expert advisor program invoices",
   ];
-  const DEMO_FORCE_ADMIN_EMAILS = ["glynn@rocketlane.com"];
 
   const SAMPLE_PDF_DATA_URL =
     "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMzYgPj4Kc3RyZWFtCkJUCi9GMSAxOCBUZgo3MiA3MzAgVGQKKFNhbXBsZSBJbnZvaWNlIElOVi0wMDAxKSBUagowIC0yOCBUZAooUHJldmlldyBmcm9tIEludm9pY2UgQWNjZXNzIE1hbmFnZXIpIFRqCjAgLTIyIFRkCihEYXRlOiAyMDI2LTAzLTAzKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2NCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDQzMyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjUwMwolJUVPRgo=";
@@ -65,7 +64,7 @@
     },
   };
 
-  window.__invoiceAccessBuild = "role-fix-20260304c";
+  window.__invoiceAccessBuild = "role-fix-20260304-prod";
   window.__invoiceAccessDebug = {
     reason: "booting",
     connected: false,
@@ -1985,15 +1984,8 @@
       (permissionHint && permissionHint.permission) || extractPermissionLabel(rawUser);
     const permissionRole = normalizePermissionRole(permissionLabel);
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
-    let role = permissionRole || inferredRole || "non_admin";
-    let permissionValue = permissionLabel || "";
-    const forcedAdmin = shouldForceAdmin(email);
-    if (forcedAdmin) {
-      role = "admin";
-      if (!permissionValue) {
-        permissionValue = "Account Admin (demo override)";
-      }
-    }
+    const role = permissionRole || inferredRole || "non_admin";
+    const permissionValue = permissionLabel || "";
     const isAdmin = role === "admin";
     const roleLabel = resolveRoleLabel(role, { permission: permissionValue });
 
@@ -2001,7 +1993,6 @@
       role,
       roleLabel,
       isAdmin,
-      forcedAdmin,
       email,
       displayName,
       permission: permissionValue,
@@ -2028,6 +2019,10 @@
     const normalizedFallback = normalizeRole(fallbackRole);
     if (normalizedFallback) {
       return normalizedFallback;
+    }
+
+    if (isAccountOwner(user, account)) {
+      return "admin";
     }
 
     if (user && typeof user === "object") {
@@ -2379,6 +2374,115 @@
     );
   }
 
+  function isAccountOwner(user, account) {
+    if (!user || !account) {
+      return false;
+    }
+
+    const userView = unwrapTopLevelObject(user);
+    const accountView = unwrapTopLevelObject(account);
+    const userId = pickFirst(
+      userView && (userView.id || userView.userId || userView.userID || userView._id)
+    );
+    const userEmail = normalizeEmail(
+      pickFirst(
+        userView &&
+          (userView.email ||
+            userView.emailId ||
+            userView.userEmail ||
+            userView.workEmail ||
+            userView.userName)
+      )
+    );
+
+    const candidates = [
+      accountView && accountView.owner,
+      accountView && accountView.accountOwner,
+      accountView && accountView.primaryOwner,
+      accountView && accountView.createdBy,
+      accountView && accountView.createdByUser,
+      accountView && accountView.createdByUserId,
+      accountView && accountView.ownerId,
+      accountView && accountView.accountOwnerId,
+      accountView &&
+        accountView.company &&
+        (accountView.company.owner || accountView.company.createdBy),
+    ];
+
+    const listCandidates = [
+      accountView && accountView.owners,
+      accountView && accountView.accountOwners,
+      accountView && accountView.admins,
+      accountView && accountView.accountAdmins,
+      accountView && accountView.administrators,
+    ];
+    listCandidates.forEach((entry) => {
+      if (Array.isArray(entry)) {
+        candidates.push(...entry);
+      }
+    });
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (principalMatchesUser(candidates[i], userId, userEmail)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function principalMatchesUser(principal, userId, userEmail) {
+    if (principal == null) {
+      return false;
+    }
+
+    if (typeof principal === "string" || typeof principal === "number") {
+      const text = pickFirst(principal);
+      if (!text) {
+        return false;
+      }
+      const asEmail = normalizeEmail(text);
+      if (userEmail && asEmail && asEmail === userEmail) {
+        return true;
+      }
+      return Boolean(userId && text === userId);
+    }
+
+    if (typeof principal !== "object") {
+      return false;
+    }
+
+    const objectPrincipal = unwrapTopLevelObject(principal);
+    const principalId = pickFirst(
+      objectPrincipal &&
+        (objectPrincipal.id ||
+          objectPrincipal.userId ||
+          objectPrincipal.userID ||
+          objectPrincipal.ownerId ||
+          objectPrincipal.createdByUserId ||
+          objectPrincipal._id)
+    );
+    if (userId && principalId && principalId === userId) {
+      return true;
+    }
+
+    const principalEmail = normalizeEmail(
+      pickFirst(
+        objectPrincipal &&
+          (objectPrincipal.email ||
+            objectPrincipal.emailId ||
+            objectPrincipal.userEmail ||
+            objectPrincipal.workEmail ||
+            objectPrincipal.userName)
+      )
+    );
+    if (userEmail && principalEmail && principalEmail === userEmail) {
+      return true;
+    }
+
+    return false;
+  }
+
   function unwrapTopLevelObject(value) {
     const source = asPlainObject(value);
     if (!source) {
@@ -2405,7 +2509,7 @@
       reason: reason || "",
       connected: state.connected,
       access: state.access,
-      forcedAdminEmails: resolveForcedAdminEmailList(),
+      ownerBasedAdmin: isAccountOwner(state.rawUser, state.rawAccount),
       inferredRoleFromRawUser: inferRole(state.rawUser, state.rawAccount, ""),
       extractedRoleLabel: extractRoleLabel(state.rawUser),
       extractedPermissionLabel: extractPermissionLabel(state.rawUser),
@@ -2416,43 +2520,6 @@
       teamMembersCount: Array.isArray(state.teamMembers) ? state.teamMembers.length : 0,
       teamMembersPreview: Array.isArray(state.teamMembers) ? state.teamMembers.slice(0, 5) : [],
     };
-  }
-
-  function resolveForcedAdminEmailList() {
-    const resolved = new Set();
-    DEMO_FORCE_ADMIN_EMAILS.forEach((item) => {
-      const email = normalizeEmail(item);
-      if (email) {
-        resolved.add(email);
-      }
-    });
-
-    try {
-      const raw = window.localStorage
-        ? window.localStorage.getItem("invoice-access-force-admin-emails")
-        : "";
-      String(raw || "")
-        .split(/[,\s;]+/g)
-        .forEach((item) => {
-          const email = normalizeEmail(item);
-          if (email) {
-            resolved.add(email);
-          }
-        });
-    } catch (_error) {
-      // Ignore storage-read failures.
-    }
-
-    return Array.from(resolved);
-  }
-
-  function shouldForceAdmin(email) {
-    const target = normalizeEmail(email);
-    if (!target) {
-      return false;
-    }
-    const forced = resolveForcedAdminEmailList();
-    return forced.includes(target);
   }
 
   function mergeObjects(a, b) {

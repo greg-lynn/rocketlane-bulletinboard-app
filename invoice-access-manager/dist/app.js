@@ -12,6 +12,7 @@
   const SOURCE_PROJECT_NAMES = [
     "expert advisor program invoices",
   ];
+  const DEMO_FORCE_ADMIN_EMAILS = ["glynn@rocketlane.com"];
 
   const SAMPLE_PDF_DATA_URL =
     "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMzYgPj4Kc3RyZWFtCkJUCi9GMSAxOCBUZgo3MiA3MzAgVGQKKFNhbXBsZSBJbnZvaWNlIElOVi0wMDAxKSBUagowIC0yOCBUZAooUHJldmlldyBmcm9tIEludm9pY2UgQWNjZXNzIE1hbmFnZXIpIFRqCjAgLTIyIFRkCihEYXRlOiAyMDI2LTAzLTAzKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMTUgMDAwMDAgbiAKMDAwMDAwMDA2NCAwMDAwMCBuIAowMDAwMDAwMTIxIDAwMDAwIG4gCjAwMDAwMDAyNDcgMDAwMDAgbiAKMDAwMDAwMDQzMyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjUwMwolJUVPRgo=";
@@ -1984,17 +1985,26 @@
       (permissionHint && permissionHint.permission) || extractPermissionLabel(rawUser);
     const permissionRole = normalizePermissionRole(permissionLabel);
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
-    const role = permissionRole || inferredRole || "non_admin";
+    let role = permissionRole || inferredRole || "non_admin";
+    let permissionValue = permissionLabel || "";
+    const forcedAdmin = shouldForceAdmin(email);
+    if (forcedAdmin) {
+      role = "admin";
+      if (!permissionValue) {
+        permissionValue = "Account Admin (demo override)";
+      }
+    }
     const isAdmin = role === "admin";
-    const roleLabel = resolveRoleLabel(role, { permission: permissionLabel });
+    const roleLabel = resolveRoleLabel(role, { permission: permissionValue });
 
     return {
       role,
       roleLabel,
       isAdmin,
+      forcedAdmin,
       email,
       displayName,
-      permission: permissionLabel || "",
+      permission: permissionValue,
     };
   }
 
@@ -2395,6 +2405,7 @@
       reason: reason || "",
       connected: state.connected,
       access: state.access,
+      forcedAdminEmails: resolveForcedAdminEmailList(),
       inferredRoleFromRawUser: inferRole(state.rawUser, state.rawAccount, ""),
       extractedRoleLabel: extractRoleLabel(state.rawUser),
       extractedPermissionLabel: extractPermissionLabel(state.rawUser),
@@ -2405,6 +2416,43 @@
       teamMembersCount: Array.isArray(state.teamMembers) ? state.teamMembers.length : 0,
       teamMembersPreview: Array.isArray(state.teamMembers) ? state.teamMembers.slice(0, 5) : [],
     };
+  }
+
+  function resolveForcedAdminEmailList() {
+    const resolved = new Set();
+    DEMO_FORCE_ADMIN_EMAILS.forEach((item) => {
+      const email = normalizeEmail(item);
+      if (email) {
+        resolved.add(email);
+      }
+    });
+
+    try {
+      const raw = window.localStorage
+        ? window.localStorage.getItem("invoice-access-force-admin-emails")
+        : "";
+      String(raw || "")
+        .split(/[,\s;]+/g)
+        .forEach((item) => {
+          const email = normalizeEmail(item);
+          if (email) {
+            resolved.add(email);
+          }
+        });
+    } catch (_error) {
+      // Ignore storage-read failures.
+    }
+
+    return Array.from(resolved);
+  }
+
+  function shouldForceAdmin(email) {
+    const target = normalizeEmail(email);
+    if (!target) {
+      return false;
+    }
+    const forced = resolveForcedAdminEmailList();
+    return forced.includes(target);
   }
 
   function mergeObjects(a, b) {

@@ -50,6 +50,7 @@
     invoices: [],
     sourceProjects: [],
     teamMembers: [],
+    permissionHint: null,
     selectedInvoiceId: null,
     searchQuery: "",
     activeTab: "invoices",
@@ -95,12 +96,14 @@
     loadLogs();
 
     const permissionHint = await fetchPermissionHintFromSdk();
+    state.permissionHint = permissionHint;
     state.access = deriveAccessProfile(
       state.rawUser,
       state.rawAccount,
       runtime.context,
       permissionHint
     );
+    updateDebugState("post-init");
 
     updateHeader();
     configureUiForAccess();
@@ -557,17 +560,8 @@
       return null;
     }
 
-    const permission = pickFirst(
-      raw.permission ||
-        raw.permissionSet ||
-        raw.accountPermission ||
-        raw.access ||
-        (raw.permissionSetObj && raw.permissionSetObj.name) ||
-        (raw.permissions && raw.permissions.name)
-    );
-    const roleLabel = pickFirst(
-      raw.role || raw.userRole || raw.designation || raw.title
-    );
+    const permission = extractPermissionLabel(raw);
+    const roleLabel = extractRoleLabel(raw);
 
     return {
       id,
@@ -1791,13 +1785,13 @@
           (rawUser.name || rawUser.fullName || rawUser.displayName || rawUser.email)
       ) || context.userName;
     const email = normalizeEmail(extractPrimaryEmail(rawUser) || context.userEmail || "");
-    const permissionRole = normalizePermissionRole(
-      permissionHint && permissionHint.permission
-    );
+    const permissionLabel =
+      (permissionHint && permissionHint.permission) || extractPermissionLabel(rawUser);
+    const permissionRole = normalizePermissionRole(permissionLabel);
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
     const role = permissionRole || inferredRole || "non_admin";
     const isAdmin = role === "admin";
-    const roleLabel = resolveRoleLabel(role, permissionHint);
+    const roleLabel = resolveRoleLabel(role, { permission: permissionLabel });
 
     return {
       role,
@@ -1805,7 +1799,7 @@
       isAdmin,
       email,
       displayName,
-      permission: permissionHint && permissionHint.permission ? permissionHint.permission : "",
+      permission: permissionLabel || "",
     };
   }
 
@@ -1847,7 +1841,10 @@
     collectRoleTokens(account, tokens, 0);
     const haystack = tokens.join(" ").toLowerCase();
 
-    if (/(^|\b)(account|workspace)?\s*admin(istrator)?(\b|$)/.test(haystack)) {
+    if (
+      /(^|\b)(account|workspace)\s*admin(istrator)?(\b|$)/.test(haystack) ||
+      /(^|\b)admin(\b|$)/.test(haystack)
+    ) {
       return "admin";
     }
     if (/expert[\s_-]*advisor/.test(haystack)) {
@@ -1890,6 +1887,11 @@
       return;
     }
 
+    const directLabel = readTextValue(value);
+    if (directLabel) {
+      target.push(directLabel);
+    }
+
     Object.keys(value).forEach((key) => {
       const lowered = key.toLowerCase();
       const next = value[key];
@@ -1918,7 +1920,13 @@
     if (!text) {
       return "";
     }
-    if (text.includes("admin")) {
+    if (
+      text === "admin" ||
+      text.includes("account admin") ||
+      text.includes("workspace admin") ||
+      text.includes("account administrator") ||
+      text.includes("workspace administrator")
+    ) {
       return "admin";
     }
     if (text.includes("expert") && text.includes("advisor")) {
@@ -2071,6 +2079,85 @@
       return String(value);
     }
     return "";
+  }
+
+  function readTextValue(value) {
+    if (typeof value === "string" || typeof value === "number") {
+      return pickFirst(value);
+    }
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i += 1) {
+        const text = readTextValue(value[i]);
+        if (text) {
+          return text;
+        }
+      }
+      return "";
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    return (
+      pickFirst(
+        value.name ||
+          value.label ||
+          value.displayName ||
+          value.title ||
+          value.value ||
+          value.role ||
+          value.permission
+      ) || ""
+    );
+  }
+
+  function extractPermissionLabel(raw) {
+    if (!raw || typeof raw !== "object") {
+      return "";
+    }
+    const permissionsList = Array.isArray(raw.permissions)
+      ? raw.permissions
+          .map((item) => readTextValue(item))
+          .filter(Boolean)
+          .join(", ")
+      : "";
+    return readTextValue(
+      raw.permission ||
+        raw.permissionName ||
+        raw.permissionSet ||
+        raw.permissionSetObj ||
+        raw.accountPermission ||
+        raw.access ||
+        raw.permissions ||
+        permissionsList
+    );
+  }
+
+  function extractRoleLabel(raw) {
+    if (!raw || typeof raw !== "object") {
+      return "";
+    }
+    return readTextValue(
+      raw.role ||
+        raw.userRole ||
+        raw.designation ||
+        raw.title ||
+        raw.userType ||
+        raw.roleInfo
+    );
+  }
+
+  function updateDebugState(reason) {
+    window.__invoiceAccessDebug = {
+      reason: reason || "",
+      connected: state.connected,
+      access: state.access,
+      permissionHint: state.permissionHint,
+      context: state.context,
+      rawUser: state.rawUser,
+      rawAccount: state.rawAccount,
+      teamMembersCount: Array.isArray(state.teamMembers) ? state.teamMembers.length : 0,
+      teamMembersPreview: Array.isArray(state.teamMembers) ? state.teamMembers.slice(0, 5) : [],
+    };
   }
 
   function mergeObjects(a, b) {

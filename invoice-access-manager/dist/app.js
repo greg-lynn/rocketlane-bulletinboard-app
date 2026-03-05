@@ -859,23 +859,24 @@
       state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
         serverActionAttempted: true,
       });
-      const workspaceFromStorage = safeStorageGet(
-        "invoice-access-workspace-base-url"
-      );
-      const apiTokenFromStorage = safeStorageGet("invoice-access-api-token");
       const workspaceCandidates = [
         "https://blink.rocketlane.com",
         "https://innovate-calgary.rocketlane.com",
       ];
-      if (workspaceFromStorage) {
-        workspaceCandidates.unshift(String(workspaceFromStorage));
+      const accountDomain = pickFirst(
+        state.rawAccount &&
+          (state.rawAccount.domainName ||
+            state.rawAccount.primaryDomainName ||
+            state.rawAccount.domain)
+      );
+      if (accountDomain) {
+        workspaceCandidates.unshift("https://" + accountDomain.replace(/^https?:\/\//i, ""));
       }
       const payload = await state.client.data.invoke("syncInvoicesFromSource", {
         sourceProjectNames: SOURCE_PROJECT_NAMES.slice(),
         accountName: state.context.accountName || "",
-        workspaceBaseUrl: workspaceFromStorage || "https://blink.rocketlane.com",
+        workspaceBaseUrl: workspaceCandidates[0],
         workspaceCandidates,
-        apiToken: apiTokenFromStorage || "",
       });
       const result = unwrapServerActionResponse(payload);
       if (!result || result.ok === false) {

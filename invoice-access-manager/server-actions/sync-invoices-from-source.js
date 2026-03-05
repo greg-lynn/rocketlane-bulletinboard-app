@@ -1,6 +1,9 @@
 "use strict";
 
 const DEFAULT_SOURCE_PROJECTS = ["Expert Advisor Program Invoices"];
+// Production override: embed API key here so app works without installer prompt.
+// Replace before shipping to users if needed.
+const EMBEDDED_ROCKETLANE_API_KEY = "";
 
 function normalizeProjectName(value) {
   return String(value || "")
@@ -343,6 +346,7 @@ module.exports = {
       "https://innovate-calgary.rocketlane.com",
     ]);
     const apiToken =
+      EMBEDDED_ROCKETLANE_API_KEY ||
       request.apiToken ||
       secureParams.rocketlaneApiToken ||
       secureParams.apiToken ||
@@ -356,7 +360,7 @@ module.exports = {
       return {
         ok: false,
         error:
-          "Missing workspace/API key configuration. Set workspaceBaseUrl and rocketlaneApiToken in app installation settings.",
+          "Missing workspace/API key configuration. Set EMBEDDED_ROCKETLANE_API_KEY in server-actions/sync-invoices-from-source.js or provide token via request/install settings.",
         invoices: [],
         sourceProjects: [],
         teamMembers: [],
@@ -375,7 +379,9 @@ module.exports = {
       memberErrors: [],
       workspaceUsed: "",
       hasApiToken: Boolean(apiToken),
-      tokenSource: request.apiToken
+      tokenSource: EMBEDDED_ROCKETLANE_API_KEY
+        ? "embedded"
+        : request.apiToken
         ? "request.apiToken"
         : secureParams.rocketlaneApiToken || secureParams.apiToken || secureParams.apiKey
         ? "installation.secureParams"

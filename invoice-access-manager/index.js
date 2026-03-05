@@ -26,27 +26,6 @@ module.exports = {
       triggers: ["FE"],
     },
   ],
-  installationFields: () => [
-    {
-      name: "workspaceBaseUrl",
-      description: "Workspace base URL (example: https://blink.rocketlane.com)",
-      type: "text",
-      required: false,
-      rerenderAllFields: false,
-      defaultValue: "https://blink.rocketlane.com",
-      hidden: false,
-      secure: false,
-    },
-    {
-      name: "rocketlaneApiToken",
-      description: "Rocketlane API key with project/document/team-member read access",
-      type: "auth_api_key",
-      required: false,
-      rerenderAllFields: false,
-      hidden: false,
-      secure: true,
-    },
-  ],
   eventHandlers: {},
   scheduledActions: [],
 };

@@ -836,14 +836,19 @@
     const projects = await fetchSourceProjects();
     state.sourceProjects = projects.map((item) => item.name);
 
-    if (!projects.length) {
-      return [];
+    const invoices = [];
+    if (projects.length) {
+      for (let i = 0; i < projects.length; i += 1) {
+        const perProject = await fetchInvoicesForProject(projects[i]);
+        invoices.push(...perProject);
+      }
     }
 
-    const invoices = [];
-    for (let i = 0; i < projects.length; i += 1) {
-      const perProject = await fetchInvoicesForProject(projects[i]);
-      invoices.push(...perProject);
+    if (!invoices.length) {
+      const sdkFallbackInvoices = await fetchInvoicesByScanningSdkArtifacts();
+      if (sdkFallbackInvoices.length) {
+        return dedupeInvoices(sdkFallbackInvoices);
+      }
     }
 
     return dedupeInvoices(invoices);
@@ -856,7 +861,7 @@
     const runtimeProject = normalizeProjectRecord(state.rawProject);
     if (
       runtimeProject &&
-      SOURCE_PROJECT_NAMES.includes(runtimeProject.name.toLowerCase())
+      isSourceProjectName(runtimeProject.name)
     ) {
       const key = runtimeProject.id || runtimeProject.name.toLowerCase();
       byKey.add(key);
@@ -869,7 +874,7 @@
       if (!project) {
         return;
       }
-      if (!SOURCE_PROJECT_NAMES.includes(project.name.toLowerCase())) {
+      if (!isSourceProjectName(project.name)) {
         return;
       }
       const key = project.id || project.name.toLowerCase();
@@ -894,7 +899,7 @@
       if (!project) {
         return;
       }
-      if (!SOURCE_PROJECT_NAMES.includes(project.name.toLowerCase())) {
+      if (!isSourceProjectName(project.name)) {
         return;
       }
       const key = project.id || project.name.toLowerCase();
@@ -983,6 +988,14 @@
         "results",
         "items",
       ]);
+      if (
+        !rows.length &&
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload)
+      ) {
+        rows.push(payload);
+      }
       rows.forEach((row) => {
         const key = buildRowKey(row);
         if (seen.has(key)) {
@@ -1043,8 +1056,16 @@
         "results",
         "items",
       ]);
+      if (
+        !rows.length &&
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload)
+      ) {
+        rows.push(payload);
+      }
       rows.forEach((row) => {
-        if (!matchesProject(row, project)) {
+        if (project && !matchesProject(row, project)) {
           return;
         }
         const key = buildRowKey(row);
@@ -1084,6 +1105,106 @@
     }
 
     return records;
+  }
+
+  async function fetchInvoicesByScanningSdkArtifacts() {
+    const records = await fetchProjectArtifactsFromSdk(null);
+    if (!records.length) {
+      return [];
+    }
+
+    const invoices = [];
+    const sourceProjectNames = new Set();
+    for (let i = 0; i < records.length; i += 1) {
+      const project = resolveProjectFromArtifact(records[i]);
+      if (!project || !isSourceProjectName(project.name)) {
+        continue;
+      }
+      sourceProjectNames.add(project.name);
+      const candidates = extractPdfCandidates(records[i]);
+      for (let j = 0; j < candidates.length; j += 1) {
+        const invoice = await buildInvoiceFromCandidate(candidates[j], project);
+        if (invoice) {
+          invoices.push(invoice);
+        }
+      }
+    }
+
+    if (sourceProjectNames.size) {
+      state.sourceProjects = Array.from(sourceProjectNames);
+    }
+    return dedupeInvoices(invoices);
+  }
+
+  function resolveProjectFromArtifact(record) {
+    if (!record || typeof record !== "object") {
+      return null;
+    }
+
+    const nested =
+      normalizeProjectRecord(record.project) ||
+      normalizeProjectRecord(record.parentProject) ||
+      normalizeProjectRecord(record.engagement);
+    if (nested) {
+      return nested;
+    }
+
+    const name = pickFirst(
+      record.projectName ||
+        record.project_name ||
+        record.engagementName ||
+        record.parentProjectName ||
+        (record.meta && (record.meta.projectName || record.meta.project))
+    );
+    if (!name) {
+      return null;
+    }
+
+    const id = pickFirst(
+      record.projectId ||
+        record.project_id ||
+        record.parentProjectId ||
+        record.engagementId
+    );
+    const accountName =
+      pickFirst(
+        record.accountName ||
+          record.companyName ||
+          (record.account && record.account.name) ||
+          (record.customer && record.customer.name)
+      ) || state.context.accountName;
+    const contacts = extractContacts(record);
+
+    return {
+      id,
+      name,
+      accountName,
+      ownerName: contacts.names[0] || "Unassigned",
+      ownerEmails: contacts.emails,
+      raw: record,
+    };
+  }
+
+  function isSourceProjectName(name) {
+    const normalized = normalizeProjectName(name);
+    if (!normalized) {
+      return false;
+    }
+    return SOURCE_PROJECT_NAMES.some((candidate) => {
+      const target = normalizeProjectName(candidate);
+      return (
+        normalized === target ||
+        normalized.includes(target) ||
+        target.includes(normalized)
+      );
+    });
+  }
+
+  function normalizeProjectName(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
   }
 
   async function requestCollection(endpoints, preferredKeys) {

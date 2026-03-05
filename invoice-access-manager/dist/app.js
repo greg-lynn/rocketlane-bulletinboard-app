@@ -50,6 +50,7 @@
     invoices: [],
     sourceProjects: [],
     teamMembers: [],
+    syncDiagnostics: {},
     permissionHint: null,
     selectedInvoiceId: null,
     searchQuery: "",
@@ -814,13 +815,11 @@
     }
 
     if (!invoices.length) {
-      state.sourceProjects = [];
-      invoices = [createSampleInvoice()];
       state.syncStatus =
-        "No source project found yet. Showing the sample invoice entry for preview.";
+        "No invoices found in source project(s) yet. Add approved invoices in Expert Advisor Program Invoices and refresh.";
       appendLog(
-        "SOURCE_PROJECTS_NOT_FOUND",
-        "No source-of-truth project was discovered. Added a sample invoice row."
+        "SOURCE_INVOICES_NOT_FOUND",
+        "No invoices were discovered from source project data."
       );
     } else {
       state.syncStatus =
@@ -953,7 +952,7 @@
 
     const invoices = [];
     for (let i = 0; i < records.length; i += 1) {
-      const candidates = extractPdfCandidates(records[i]);
+      const candidates = extractInvoiceCandidates(records[i]);
       for (let j = 0; j < candidates.length; j += 1) {
         const invoice = await buildInvoiceFromCandidate(candidates[j], project);
         if (invoice) {
@@ -965,7 +964,7 @@
     if (!invoices.length) {
       appendLog(
         "SOURCE_INVOICES_NOT_FOUND",
-        'No PDF invoice documents were found under source project "' +
+        'No invoice records were found under source project "' +
           project.name +
           '".'
       );
@@ -1045,6 +1044,7 @@
 
     const records = [];
     const seen = new Set();
+    const attemptedKeys = [];
     const addRows = (payload) => {
       const rows = extractCollection(payload, [
         "documents",
@@ -1089,6 +1089,7 @@
       "projectArtifacts",
     ];
     for (let i = 0; i < directCandidates.length; i += 1) {
+      attemptedKeys.push(directCandidates[i]);
       const payload = await invokeSdkDataGet(state.client, directCandidates[i]);
       if (payload) {
         addRows(payload);
@@ -1101,6 +1102,7 @@
     );
 
     for (let i = 0; i < keys.length; i += 1) {
+      attemptedKeys.push(String(keys[i]));
       const payload = await invokeSdkDataGet(state.client, identifiers[keys[i]]);
       if (payload) {
         addRows(payload);
@@ -1112,6 +1114,7 @@
         (key) => !isExcludedFromBroadArtifactScan(key)
       );
       for (let i = 0; i < broadKeys.length; i += 1) {
+        attemptedKeys.push(String(broadKeys[i]));
         const payload = await invokeSdkDataGet(state.client, identifiers[broadKeys[i]]);
         if (!payload || !payloadLikelyContainsArtifacts(payload)) {
           continue;
@@ -1119,6 +1122,12 @@
         addRows(payload);
       }
     }
+
+    state.syncDiagnostics = {
+      attemptedKeys: dedupeStrings(attemptedKeys),
+      artifactRecordsFound: records.length,
+      sourceProjectsFound: state.sourceProjects.slice(),
+    };
 
     return records;
   }
@@ -1146,7 +1155,7 @@
         continue;
       }
       sourceProjectNames.add(resolvedProject.name);
-      const candidates = extractPdfCandidates(records[i]);
+      const candidates = extractInvoiceCandidates(records[i]);
       for (let j = 0; j < candidates.length; j += 1) {
         const invoice = await buildInvoiceFromCandidate(candidates[j], resolvedProject);
         if (invoice) {
@@ -1321,7 +1330,55 @@
     if (!rows.length) {
       return false;
     }
-    return rows.some((row) => looksLikePdfNode(row) || extractPdfCandidates(row).length > 0);
+    return rows.some((row) => looksLikeInvoiceRecordNode(row) || extractInvoiceCandidates(row).length > 0);
+  }
+
+  function extractAssociatedEmails(node) {
+    if (!node || typeof node !== "object") {
+      return [];
+    }
+    const direct = [
+      node.projectManagerEmail,
+      node.pmEmail,
+      node.expertAdvisorEmail,
+      node.ownerEmail,
+      node.assigneeEmail,
+      node.createdByEmail,
+      node.submittedByEmail,
+      node.approvedByEmail,
+      node.userEmail,
+      node.email,
+    ].map((value) => normalizeEmail(value));
+    return dedupeEmails(direct);
+  }
+
+  function extractAssociatedUserIds(node) {
+    if (!node || typeof node !== "object") {
+      return [];
+    }
+    const ids = [];
+    const push = (value) => {
+      const text = pickFirst(value);
+      if (text) {
+        ids.push(text);
+      }
+    };
+    push(node.userId);
+    push(node.userID);
+    push(node.ownerId);
+    push(node.assigneeId);
+    push(node.projectManagerId);
+    push(node.expertAdvisorId);
+    push(node.createdByUserId);
+    push(node.submittedByUserId);
+    push(node.approvedByUserId);
+    if (node.createdBy && typeof node.createdBy === "object") {
+      push(node.createdBy.id || node.createdBy.userId || node.createdBy.userID);
+    }
+    if (node.user && typeof node.user === "object") {
+      push(node.user.id || node.user.userId || node.user.userID);
+    }
+    return dedupeStrings(ids);
   }
 
   async function requestCollection(endpoints, preferredKeys) {
@@ -1540,6 +1597,80 @@
     return candidates;
   }
 
+  function extractInvoiceCandidates(record) {
+    const pdfCandidates = extractPdfCandidates(record);
+    const seen = new Set();
+    const candidates = [];
+
+    const addCandidate = (node) => {
+      if (!node || typeof node !== "object" || Array.isArray(node)) {
+        return;
+      }
+      const key = buildRowKey(node);
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      candidates.push(node);
+    };
+
+    pdfCandidates.forEach(addCandidate);
+
+    const visited = new Set();
+    function walk(value, depth) {
+      if (depth > 5 || value == null) {
+        return;
+      }
+      if (typeof value !== "object") {
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((entry) => walk(entry, depth + 1));
+        return;
+      }
+      if (visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+      if (looksLikeInvoiceRecordNode(value)) {
+        addCandidate(value);
+      }
+      Object.keys(value).forEach((key) => walk(value[key], depth + 1));
+    }
+
+    walk(record, 0);
+    return candidates;
+  }
+
+  function looksLikeInvoiceRecordNode(node) {
+    const invoiceNumber = pickFirst(
+      node.invoiceNumber ||
+        node.invoiceNo ||
+        node.invoiceId ||
+        node.billNumber ||
+        node.referenceNumber
+    );
+    const status = String(node.status || node.invoiceStatus || node.state || "").toLowerCase();
+    const category = String(node.category || node.kind || node.type || "").toLowerCase();
+    const name = String(
+      node.name || node.title || node.invoiceName || node.invoiceTitle || ""
+    ).toLowerCase();
+    const hasMoneySignal = Boolean(
+      node.totalAmount || node.amount || node.netAmount || node.grossAmount || node.currencyCode
+    );
+
+    if (invoiceNumber) {
+      return true;
+    }
+    if (name.includes("invoice") || category.includes("invoice")) {
+      return true;
+    }
+    if (status.includes("approved") && hasMoneySignal) {
+      return true;
+    }
+    return false;
+  }
+
   function looksLikePdfNode(node) {
     const mime = String(
       node.mimeType || node.contentType || node.fileType || node.type || ""
@@ -1600,18 +1731,25 @@
         (node.file && (node.file.signedUrl || node.file.downloadUrl || node.file.url)) ||
         ""
     ).trim();
-    if (!pdfUrlRaw) {
-      return null;
-    }
-
-    const pdfUrl = toAbsoluteUrl(pdfUrlRaw);
+    const pdfUrl = pdfUrlRaw ? toAbsoluteUrl(pdfUrlRaw) : "";
     const invoiceName =
-      pickFirst(node.name || node.fileName || node.title) || "Invoice PDF";
+      pickFirst(
+        node.name ||
+          node.fileName ||
+          node.title ||
+          node.subject ||
+          node.invoiceName ||
+          node.invoiceTitle
+      ) || "Invoice";
     const invoiceNumber =
       pickFirst(
         node.invoiceNumber ||
+          node.invoiceNo ||
+          node.invoiceId ||
           node.number ||
           node.docNumber ||
+          node.documentNumber ||
+          node.billNumber ||
           node.referenceNumber ||
           extractInvoiceNumberFromText(invoiceName)
       ) || "INV-" + createShortId();
@@ -1621,6 +1759,8 @@
           node.date ||
           node.issuedOn ||
           node.issuedDate ||
+          node.approvedAt ||
+          node.submittedAt ||
           node.createdAt ||
           node.updatedAt
       ) || new Date().toISOString();
@@ -1637,22 +1777,48 @@
       nodeContacts.names[0] ||
       project.ownerName ||
       "Unassigned";
-    const scrubbedEmails = await scrubPdfForEmails(pdfUrl, invoiceNumber);
+    const scrubbedEmails = pdfUrl ? await scrubPdfForEmails(pdfUrl, invoiceNumber) : [];
+    const associatedUserIds = dedupeStrings(
+      extractAssociatedUserIds(node).concat(extractAssociatedUserIds(project.raw || {}))
+    );
     const associatedEmails = dedupeEmails(
-      nodeContacts.emails.concat(project.ownerEmails || []).concat(scrubbedEmails)
+      nodeContacts.emails
+        .concat(project.ownerEmails || [])
+        .concat(scrubbedEmails)
+        .concat(extractAssociatedEmails(node))
+        .concat(
+          associatedUserIds.includes(String(state.context.userId || "").trim()) &&
+            state.access.email
+            ? [state.access.email]
+            : []
+        )
     );
 
     return normalizeInvoice({
       id:
-        pickFirst(node.id || node._id || node.fileId || node.documentId) ||
+        pickFirst(
+          node.id ||
+            node._id ||
+            node.fileId ||
+            node.documentId ||
+            node.invoiceId ||
+            node.invoiceNumber
+        ) ||
         createId(),
       invoiceNumber,
       invoiceName,
       ownerName,
-      accountName: project.accountName || state.context.accountName || "Rocketlane Account",
+      accountName:
+        pickFirst(
+          node.accountName ||
+            node.companyName ||
+            (node.account && node.account.name) ||
+            (node.customer && node.customer.name)
+        ) || project.accountName || state.context.accountName || "Rocketlane Account",
       invoiceDate,
       pdfUrl,
       associatedEmails,
+      associatedUserIds,
       sourceProjectName: project.name,
     });
   }
@@ -1739,29 +1905,11 @@
     return dedupeEmails(String(text || "").match(EMAIL_PATTERN) || []);
   }
 
-  function createSampleInvoice() {
-    const fallbackEmail = state.access.email || "sample@rocketlane.com";
-    return normalizeInvoice({
-      id: "sample-invoice-preview",
-      invoiceNumber: "INV-0001-SAMPLE",
-      invoiceName: "Sample invoice preview",
-      ownerName: "Sample Expert Advisor",
-      accountName: state.context.accountName || "Rocketlane Workspace",
-      invoiceDate: "2026-03-03T00:00:00.000Z",
-      pdfUrl: SAMPLE_PDF_DATA_URL,
-      associatedEmails: [fallbackEmail, "sample@rocketlane.com"],
-      sourceProjectName: "Sample (fallback)",
-    });
-  }
-
   function normalizeInvoice(invoice) {
     if (!invoice || typeof invoice !== "object") {
       return null;
     }
     const pdfUrl = String(invoice.pdfUrl || "").trim();
-    if (!pdfUrl) {
-      return null;
-    }
 
     return {
       id: String(invoice.id || createId()),
@@ -1772,6 +1920,7 @@
       invoiceDate: String(invoice.invoiceDate || new Date().toISOString()),
       pdfUrl,
       associatedEmails: dedupeEmails(invoice.associatedEmails || []),
+      associatedUserIds: dedupeStrings(invoice.associatedUserIds || []),
       sourceProjectName: String(invoice.sourceProjectName || "").trim(),
     };
   }
@@ -1992,13 +2141,19 @@
       numberButton.type = "button";
       numberButton.className = "invoice-link";
       numberButton.textContent = invoice.invoiceNumber;
-      numberButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        state.selectedInvoiceId = invoice.id;
-        renderInvoiceTable();
-        renderSelectedSummary();
-        openPdfModal(invoice);
-      });
+      if (invoice.pdfUrl) {
+        numberButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          state.selectedInvoiceId = invoice.id;
+          renderInvoiceTable();
+          renderSelectedSummary();
+          openPdfModal(invoice);
+        });
+      } else {
+        numberButton.disabled = true;
+        numberButton.classList.add("disabled");
+        numberButton.title = "No PDF preview available for this invoice.";
+      }
       numberCell.appendChild(numberButton);
 
       const nameCell = document.createElement("td");
@@ -2037,13 +2192,13 @@
       " · " +
       invoice.ownerName +
       " · " +
-      formatDate(invoice.invoiceDate);
+      formatDate(invoice.invoiceDate) +
+      (invoice.pdfUrl ? "" : " · PDF preview unavailable");
   }
 
   function renderSourceProjects() {
     if (!state.sourceProjects.length) {
-      refs.sourceProjectsText.textContent =
-        "No source project found yet. Sample invoice is shown for preview.";
+      refs.sourceProjectsText.textContent = "No source project found yet.";
       return;
     }
     refs.sourceProjectsText.textContent = state.sourceProjects.join(", ");
@@ -2071,11 +2226,14 @@
 
     if (!state.access.isAdmin) {
       const email = state.access.email;
-      if (!email) {
+      const userId = String(state.context.userId || "").trim();
+      if (!email && !userId) {
         return [];
       }
-      invoices = invoices.filter((invoice) =>
-        invoice.associatedEmails.includes(email)
+      invoices = invoices.filter(
+        (invoice) =>
+          (email && invoice.associatedEmails.includes(email)) ||
+          (userId && invoice.associatedUserIds.includes(userId))
       );
     }
 
@@ -2091,7 +2249,11 @@
           " " +
           invoice.accountName +
           " " +
-          invoice.invoiceDate
+          invoice.invoiceDate +
+          " " +
+          invoice.sourceProjectName +
+          " " +
+          invoice.associatedEmails.join(" ")
         ).toLowerCase();
         return haystack.includes(search);
       });
@@ -2789,6 +2951,7 @@
       syncStatus: state.syncStatus,
       sourceProjects: state.sourceProjects,
       invoiceCount: Array.isArray(state.invoices) ? state.invoices.length : 0,
+      syncDiagnostics: state.syncDiagnostics,
       permissionHint: state.permissionHint,
       context: state.context,
       rawUser: state.rawUser,

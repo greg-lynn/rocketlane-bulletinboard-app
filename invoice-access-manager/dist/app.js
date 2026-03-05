@@ -805,6 +805,7 @@
     state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
       lastRefreshAt: new Date().toISOString(),
       usedServerAction: false,
+      serverActionAttempted: false,
       usedSdkFallback: false,
       serverActionError: "",
     });
@@ -855,6 +856,9 @@
     }
 
     try {
+      state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
+        serverActionAttempted: true,
+      });
       const workspaceFromStorage = safeStorageGet(
         "invoice-access-workspace-base-url"
       );
@@ -880,6 +884,9 @@
           state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
             serverActionError: String(result.error || ""),
           });
+        }
+        if (result && result.diagnostics) {
+          state.syncDiagnostics = mergeObjects(state.syncDiagnostics, result.diagnostics);
         }
         return [];
       }
@@ -1251,11 +1258,12 @@
       }
     }
 
-    state.syncDiagnostics = {
+    state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
       attemptedKeys: dedupeStrings(attemptedKeys),
       artifactRecordsFound: records.length,
       sourceProjectsFound: state.sourceProjects.slice(),
-    };
+      dataIdentifiersCount: Object.keys(identifiers || {}).length,
+    });
 
     return records;
   }

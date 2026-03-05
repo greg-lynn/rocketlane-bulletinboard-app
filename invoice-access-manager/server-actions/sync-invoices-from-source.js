@@ -374,6 +374,16 @@ module.exports = {
       invoiceErrors: [],
       memberErrors: [],
       workspaceUsed: "",
+      hasApiToken: Boolean(apiToken),
+      tokenSource: request.apiToken
+        ? "request.apiToken"
+        : secureParams.rocketlaneApiToken || secureParams.apiToken || secureParams.apiKey
+        ? "installation.secureParams"
+        : iParams.rocketlaneApiToken || iParams.apiToken
+        ? "installation.iparams"
+        : context.apiKey
+        ? "context.apiKey"
+        : "none",
     };
 
     let sourceProjects = [];

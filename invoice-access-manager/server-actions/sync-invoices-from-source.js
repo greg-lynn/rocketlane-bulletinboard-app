@@ -520,6 +520,131 @@ function normalizeMember(record) {
   };
 }
 
+function collectRoleTokens(value, target, depth) {
+  if (depth > 6 || value == null) {
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    target.push(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectRoleTokens(item, target, depth + 1));
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  const directLabel = pickFirst(
+    value.name ||
+      value.label ||
+      value.displayName ||
+      value.title ||
+      value.value ||
+      value.role ||
+      value.permission
+  );
+  if (directLabel) {
+    target.push(directLabel);
+  }
+  Object.keys(value).forEach((key) => {
+    const lowered = key.toLowerCase();
+    if (
+      lowered.includes("role") ||
+      lowered.includes("permission") ||
+      lowered.includes("admin") ||
+      lowered.includes("owner") ||
+      lowered.includes("type") ||
+      lowered.includes("group") ||
+      lowered === "data" ||
+      lowered === "response" ||
+      lowered === "result" ||
+      lowered === "payload" ||
+      lowered === "user" ||
+      lowered === "account"
+    ) {
+      collectRoleTokens(value[key], target, depth + 1);
+    }
+  });
+}
+
+function isAdminToken(text) {
+  const value = String(text || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ");
+  if (!value) {
+    return false;
+  }
+  return (
+    /(^|\b)(account|workspace|company)\s*admin(istrator)?(\b|$)/.test(value) ||
+    /(^|\b)(account|workspace|company)\s*owner(\b|$)/.test(value) ||
+    /(^|\b)admin(\b|$)/.test(value)
+  );
+}
+
+function deriveViewerAccess(request, context) {
+  const ctxUser = (context && context.user) || {};
+  const ctxAccount = (context && context.account) || {};
+  const viewerContext = (request && request.viewerContext) || {};
+  const id = pickFirst(
+    ctxUser.id || ctxUser.userId || ctxUser._id || viewerContext.userId
+  );
+  const email = normalizeEmail(
+    pickFirst(
+      ctxUser.email ||
+        ctxUser.emailId ||
+        ctxUser.userEmail ||
+        viewerContext.userEmail
+    )
+  );
+  const displayName =
+    fullName(ctxUser) ||
+    pickFirst(
+      ctxUser.name || ctxUser.displayName || ctxUser.userName || viewerContext.userName
+    );
+  const permission = pickFirst(
+    ctxUser.permission ||
+      ctxUser.permissionSet ||
+      (ctxUser.permissionSet && ctxUser.permissionSet.name) ||
+      (ctxUser.permissionSetObj && ctxUser.permissionSetObj.name) ||
+      ctxUser.accountPermission ||
+      (ctxUser.accountPermissionSet && ctxUser.accountPermissionSet.name)
+  );
+  const roleLabel = pickFirst(
+    ctxUser.role ||
+      ctxUser.userRole ||
+      ctxUser.type ||
+      ctxUser.userType ||
+      ctxUser.designation ||
+      viewerContext.userRole
+  );
+
+  const tokens = [];
+  collectRoleTokens(ctxUser, tokens, 0);
+  collectRoleTokens(ctxAccount, tokens, 0);
+  collectRoleTokens(viewerContext, tokens, 0);
+  const uniqueTokens = dedupeStrings(tokens);
+  const tokenText = uniqueTokens.join(" ");
+  const isAdmin = Boolean(
+    ctxUser.isAdmin === true ||
+      ctxUser.admin === true ||
+      ctxUser.isAccountAdmin === true ||
+      ctxUser.accountAdmin === true ||
+      isAdminToken(permission) ||
+      isAdminToken(roleLabel) ||
+      isAdminToken(tokenText)
+  );
+
+  return {
+    id,
+    email,
+    displayName,
+    permission,
+    roleLabel,
+    isAdmin,
+  };
+}
+
 module.exports = {
   syncInvoicesFromSource: async (request = {}, context = {}) => {
     const sourceProjectNames = Array.isArray(request.sourceProjectNames)
@@ -592,7 +717,9 @@ module.exports = {
         : context.apiKey
         ? "context.apiKey"
         : "none",
+      contextUserKeys: context && context.user ? Object.keys(context.user) : [],
     };
+    const viewer = deriveViewerAccess(request, context);
 
     let sourceProjects = [];
     let invoices = [];
@@ -703,6 +830,7 @@ module.exports = {
       teamMembers: dedupeStrings(members.map((m) => `${m.email}|${m.id}`))
         .map((key) => members.find((m) => `${m.email}|${m.id}` === key))
         .filter(Boolean),
+      viewer,
       diagnostics,
     };
   },

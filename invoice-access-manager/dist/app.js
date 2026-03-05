@@ -819,6 +819,7 @@
     const email = normalizeEmail(
       pickFirst(
         raw.email ||
+          raw.emailId ||
           raw.userEmail ||
           raw.workEmail ||
           (raw.user && raw.user.email) ||
@@ -837,6 +838,12 @@
       email,
       permission,
       roleLabel,
+      isAdmin: Boolean(
+        raw.isAdmin === true ||
+          raw.admin === true ||
+          raw.isAccountAdmin === true ||
+          raw.accountAdmin === true
+      ),
     };
   }
 
@@ -949,6 +956,12 @@
         accountName: state.context.accountName || "",
         workspaceBaseUrl: workspaceCandidates[0],
         workspaceCandidates,
+        viewerContext: {
+          userId: state.context.userId || "",
+          userEmail: state.context.userEmail || "",
+          userRole: state.context.userRole || "",
+          userName: state.context.userName || "",
+        },
       });
       const result = unwrapServerActionResponse(payload);
       if (!result || result.ok === false) {
@@ -989,6 +1002,39 @@
           );
           state.permissionHint = permissionHint;
           // Never demote an already-detected admin using a weaker hint payload.
+          if (!state.access.isAdmin || nextAccess.isAdmin) {
+            state.access = nextAccess;
+          }
+          updateHeader();
+          configureUiForAccess();
+        }
+      }
+
+      if (result.viewer && typeof result.viewer === "object") {
+        const viewerHint = normalizeTeamMemberFromAny(result.viewer) || {};
+        if (result.viewer.isAdmin === true) {
+          viewerHint.isAdmin = true;
+        }
+        if (!viewerHint.permission) {
+          viewerHint.permission = pickFirst(result.viewer.permission);
+        }
+        if (!viewerHint.roleLabel) {
+          viewerHint.roleLabel = pickFirst(result.viewer.roleLabel);
+        }
+        if (!viewerHint.email) {
+          viewerHint.email = normalizeEmail(pickFirst(result.viewer.email || result.viewer.emailId));
+        }
+        if (!viewerHint.id) {
+          viewerHint.id = pickFirst(result.viewer.id || result.viewer.userId || result.viewer._id);
+        }
+        if (hasPermissionSignals(viewerHint)) {
+          state.permissionHint = mergeObjects(state.permissionHint || {}, viewerHint);
+          const nextAccess = deriveAccessProfile(
+            state.rawUser,
+            state.rawAccount,
+            state.context,
+            state.permissionHint
+          );
           if (!state.access.isAdmin || nextAccess.isAdmin) {
             state.access = nextAccess;
           }
@@ -2524,6 +2570,9 @@
     if (!hint || typeof hint !== "object") {
       return false;
     }
+    if (hint.isAdmin === true) {
+      return true;
+    }
     const permission = String(hint.permission || "").trim();
     const roleLabel = String(hint.roleLabel || "").trim();
     return Boolean(permission || roleLabel);
@@ -2685,7 +2734,8 @@
       (permissionHint && permissionHint.roleLabel) || extractRoleLabel(rawUser) || context.userRole;
     const permissionRole = normalizePermissionRole(permissionLabel || roleLabelHint);
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
-    const role = permissionRole || inferredRole || "non_admin";
+    const forcedAdmin = Boolean(permissionHint && permissionHint.isAdmin === true);
+    const role = forcedAdmin ? "admin" : permissionRole || inferredRole || "non_admin";
     const permissionValue = permissionLabel || roleLabelHint || "";
     const isAdmin = role === "admin";
     const roleLabel = resolveRoleLabel(role, { permission: permissionValue });
@@ -2701,11 +2751,15 @@
   }
 
   function resolveRoleLabel(role, permissionHint) {
+    if (role === "admin") {
+      const label = String((permissionHint && permissionHint.permission) || "").trim();
+      if (label && isLikelyAdminLabel(label)) {
+        return label;
+      }
+      return "Account Admin";
+    }
     if (permissionHint && permissionHint.permission) {
       return permissionHint.permission;
-    }
-    if (role === "admin") {
-      return "Account Admin";
     }
     if (role === "collaborator") {
       return "Collaborator";
@@ -2780,6 +2834,24 @@
       return "admin";
     }
     return "non_admin";
+  }
+
+  function isLikelyAdminLabel(value) {
+    const text = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]+/g, " ");
+    if (!text) {
+      return false;
+    }
+    return (
+      text.includes("account admin") ||
+      text.includes("workspace admin") ||
+      text.includes("account owner") ||
+      text.includes("workspace owner") ||
+      text.includes("company owner") ||
+      text === "admin"
+    );
   }
 
   function collectRoleTokens(value, target, depth) {

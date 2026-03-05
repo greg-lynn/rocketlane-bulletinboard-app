@@ -116,6 +116,7 @@
     updateHeader();
     configureUiForAccess();
     await refreshInvoicesFromSource();
+    updateDebugState("post-sync");
     ensureSelectedInvoice();
     renderAll();
   }
@@ -1077,7 +1078,16 @@
       });
     };
 
-    const directCandidates = ["documents", "files", "attachments", "tasks", "invoices"];
+    const directCandidates = [
+      "documents",
+      "files",
+      "attachments",
+      "tasks",
+      "invoices",
+      "invoiceDocuments",
+      "projectInvoices",
+      "projectArtifacts",
+    ];
     for (let i = 0; i < directCandidates.length; i += 1) {
       const payload = await invokeSdkDataGet(state.client, directCandidates[i]);
       if (payload) {
@@ -1086,20 +1096,26 @@
     }
 
     const identifiers = (state.client.data && state.client.data.dataIdentifiers) || {};
-    const keys = Object.keys(identifiers).filter((key) => {
-      const upper = key.toUpperCase();
-      const hasAsset =
-        upper.includes("DOCUMENT") ||
-        upper.includes("FILE") ||
-        upper.includes("ATTACHMENT") ||
-        upper.includes("INVOICE") ||
-        upper.includes("TASK");
-      return hasAsset && !upper.includes("CURRENT_USER");
-    });
+    const keys = Object.keys(identifiers).filter((key) =>
+      isPotentialArtifactIdentifierKey(key)
+    );
 
     for (let i = 0; i < keys.length; i += 1) {
       const payload = await invokeSdkDataGet(state.client, identifiers[keys[i]]);
       if (payload) {
+        addRows(payload);
+      }
+    }
+
+    if (!records.length) {
+      const broadKeys = Object.keys(identifiers).filter(
+        (key) => !isExcludedFromBroadArtifactScan(key)
+      );
+      for (let i = 0; i < broadKeys.length; i += 1) {
+        const payload = await invokeSdkDataGet(state.client, identifiers[broadKeys[i]]);
+        if (!payload || !payloadLikelyContainsArtifacts(payload)) {
+          continue;
+        }
         addRows(payload);
       }
     }
@@ -1117,13 +1133,22 @@
     const sourceProjectNames = new Set();
     for (let i = 0; i < records.length; i += 1) {
       const project = resolveProjectFromArtifact(records[i]);
-      if (!project || !isSourceProjectName(project.name)) {
+      const projectFromText = detectSourceProjectNameInValue(records[i]);
+      const resolvedProject =
+        project ||
+        (projectFromText
+          ? createSyntheticSourceProject(projectFromText, records[i])
+          : null);
+      if (!resolvedProject) {
         continue;
       }
-      sourceProjectNames.add(project.name);
+      if (!isSourceProjectName(resolvedProject.name)) {
+        continue;
+      }
+      sourceProjectNames.add(resolvedProject.name);
       const candidates = extractPdfCandidates(records[i]);
       for (let j = 0; j < candidates.length; j += 1) {
-        const invoice = await buildInvoiceFromCandidate(candidates[j], project);
+        const invoice = await buildInvoiceFromCandidate(candidates[j], resolvedProject);
         if (invoice) {
           invoices.push(invoice);
         }
@@ -1149,13 +1174,17 @@
       return nested;
     }
 
-    const name = pickFirst(
+    const detectedSourceName = detectSourceProjectNameInValue(record);
+    const name =
+      pickFirst(
       record.projectName ||
         record.project_name ||
+        record.projectTitle ||
+        record.projectDisplayName ||
         record.engagementName ||
         record.parentProjectName ||
         (record.meta && (record.meta.projectName || record.meta.project))
-    );
+    ) || detectedSourceName;
     if (!name) {
       return null;
     }
@@ -1185,6 +1214,18 @@
     };
   }
 
+  function createSyntheticSourceProject(name, record) {
+    const contacts = extractContacts(record);
+    return {
+      id: "",
+      name: String(name || SOURCE_PROJECT_NAMES[0] || "").trim(),
+      accountName: state.context.accountName,
+      ownerName: contacts.names[0] || "Unassigned",
+      ownerEmails: contacts.emails,
+      raw: record,
+    };
+  }
+
   function isSourceProjectName(name) {
     const normalized = normalizeProjectName(name);
     if (!normalized) {
@@ -1205,6 +1246,82 @@
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
+  }
+
+  function detectSourceProjectNameInValue(value) {
+    let serialized = "";
+    try {
+      serialized = JSON.stringify(value || {});
+    } catch (_error) {
+      serialized = String(value || "");
+    }
+    const haystack = normalizeProjectName(serialized);
+    if (!haystack) {
+      return "";
+    }
+    for (let i = 0; i < SOURCE_PROJECT_NAMES.length; i += 1) {
+      const candidate = SOURCE_PROJECT_NAMES[i];
+      const normalized = normalizeProjectName(candidate);
+      if (normalized && haystack.includes(normalized)) {
+        return candidate;
+      }
+    }
+    return "";
+  }
+
+  function isPotentialArtifactIdentifierKey(key) {
+    const upper = String(key || "").toUpperCase();
+    if (!upper || upper.includes("CURRENT_USER")) {
+      return false;
+    }
+    return (
+      upper.includes("DOCUMENT") ||
+      upper.includes("FILE") ||
+      upper.includes("ATTACHMENT") ||
+      upper.includes("INVOICE") ||
+      upper.includes("TASK") ||
+      upper.includes("ARTIFACT") ||
+      upper.includes("BILL") ||
+      upper.includes("RECEIPT")
+    );
+  }
+
+  function isExcludedFromBroadArtifactScan(key) {
+    const upper = String(key || "").toUpperCase();
+    return (
+      upper.includes("CURRENT_USER") ||
+      upper.includes("CURRENT_ACCOUNT") ||
+      upper.includes("CURRENT_PROJECT") ||
+      upper.includes("GET_USER_DATA") ||
+      upper.includes("GET_ACCOUNT_DATA") ||
+      upper.includes("GET_PROJECT_DATA") ||
+      upper.includes("USER") ||
+      upper.includes("ACCOUNT") ||
+      upper.includes("PERMISSION") ||
+      upper.includes("ROLE") ||
+      upper.includes("TEAM") ||
+      upper.includes("MEMBER")
+    );
+  }
+
+  function payloadLikelyContainsArtifacts(payload) {
+    if (!payload) {
+      return false;
+    }
+    const rows = extractCollection(payload, [
+      "documents",
+      "files",
+      "invoices",
+      "attachments",
+      "tasks",
+      "items",
+      "results",
+      "data",
+    ]);
+    if (!rows.length) {
+      return false;
+    }
+    return rows.some((row) => looksLikePdfNode(row) || extractPdfCandidates(row).length > 0);
   }
 
   async function requestCollection(endpoints, preferredKeys) {
@@ -1429,8 +1546,24 @@
     ).toLowerCase();
     const name = String(node.name || node.fileName || node.title || "").toLowerCase();
     const url = String(
-      node.url || node.fileUrl || node.downloadUrl || node.signedUrl || node.href || ""
+      node.url ||
+        node.fileUrl ||
+        node.downloadUrl ||
+        node.signedUrl ||
+        node.href ||
+        node.previewUrl ||
+        node.attachmentUrl ||
+        node.documentUrl ||
+        (node.file && (node.file.url || node.file.downloadUrl || node.file.signedUrl)) ||
+        ""
     ).toLowerCase();
+    const category = String(
+      node.category || node.kind || node.documentType || node.recordType || ""
+    ).toLowerCase();
+    const hasInvoiceMarker = Boolean(
+      pickFirst(node.invoiceNumber || node.invoiceId || node.billNumber || node.referenceNumber)
+    );
+    const hasFileUrl = Boolean(url);
 
     if (mime.includes("pdf")) {
       return true;
@@ -1441,12 +1574,31 @@
     if (url.includes(".pdf")) {
       return true;
     }
+    if (
+      hasFileUrl &&
+      (name.includes("invoice") ||
+        category.includes("invoice") ||
+        category.includes("bill") ||
+        category.includes("receipt") ||
+        hasInvoiceMarker)
+    ) {
+      return true;
+    }
     return false;
   }
 
   async function buildInvoiceFromCandidate(node, project) {
     const pdfUrlRaw = String(
-      node.signedUrl || node.downloadUrl || node.fileUrl || node.url || node.href || ""
+      node.signedUrl ||
+        node.downloadUrl ||
+        node.fileUrl ||
+        node.url ||
+        node.href ||
+        node.previewUrl ||
+        node.attachmentUrl ||
+        node.documentUrl ||
+        (node.file && (node.file.signedUrl || node.file.downloadUrl || node.file.url)) ||
+        ""
     ).trim();
     if (!pdfUrlRaw) {
       return null;
@@ -2634,6 +2786,9 @@
       inferredRoleFromRawUser: inferRole(state.rawUser, state.rawAccount, ""),
       extractedRoleLabel: extractRoleLabel(state.rawUser),
       extractedPermissionLabel: extractPermissionLabel(state.rawUser),
+      syncStatus: state.syncStatus,
+      sourceProjects: state.sourceProjects,
+      invoiceCount: Array.isArray(state.invoices) ? state.invoices.length : 0,
       permissionHint: state.permissionHint,
       context: state.context,
       rawUser: state.rawUser,

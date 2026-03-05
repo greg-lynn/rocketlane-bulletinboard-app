@@ -804,7 +804,12 @@
     let invoices = [];
     try {
       if (state.connected) {
-        invoices = await fetchInvoicesFromSourceProjects();
+        const serverInvoices = await fetchInvoicesFromServerAction();
+        if (serverInvoices && serverInvoices.length) {
+          invoices = serverInvoices;
+        } else {
+          invoices = await fetchInvoicesFromSourceProjects();
+        }
       }
     } catch (error) {
       appendLog(
@@ -830,6 +835,115 @@
     }
 
     state.invoices = invoices.map(normalizeInvoice).filter(Boolean);
+  }
+
+  async function fetchInvoicesFromServerAction() {
+    if (
+      !state.client ||
+      !state.client.data ||
+      typeof state.client.data.invoke !== "function"
+    ) {
+      return [];
+    }
+
+    try {
+      const workspaceFromStorage = safeStorageGet(
+        "invoice-access-workspace-base-url"
+      );
+      const apiTokenFromStorage = safeStorageGet("invoice-access-api-token");
+      const workspaceCandidates = [
+        "https://blink.rocketlane.com",
+        "https://innovate-calgary.rocketlane.com",
+      ];
+      if (workspaceFromStorage) {
+        workspaceCandidates.unshift(String(workspaceFromStorage));
+      }
+      const payload = await state.client.data.invoke("syncInvoicesFromSource", {
+        sourceProjectNames: SOURCE_PROJECT_NAMES.slice(),
+        accountName: state.context.accountName || "",
+        workspaceBaseUrl: workspaceFromStorage || "https://blink.rocketlane.com",
+        workspaceCandidates,
+        apiToken: apiTokenFromStorage || "",
+      });
+      const result = unwrapServerActionResponse(payload);
+      if (!result || result.ok === false) {
+        if (result && result.error) {
+          appendLog("SOURCE_FETCH_FAILED", result.error);
+        }
+        return [];
+      }
+
+      if (Array.isArray(result.sourceProjects) && result.sourceProjects.length) {
+        state.sourceProjects = result.sourceProjects
+          .map((project) => normalizeProjectRecord(project))
+          .filter(Boolean)
+          .map((project) => project.name);
+      }
+
+      if (Array.isArray(result.teamMembers) && result.teamMembers.length) {
+        state.teamMembers = result.teamMembers
+          .map((member) => normalizeTeamMemberFromAny(member))
+          .filter(Boolean);
+        const permissionHint = resolveCurrentUserPermission(
+          state.teamMembers,
+          state.rawUser,
+          state.context
+        );
+        if (permissionHint) {
+          state.permissionHint = permissionHint;
+          state.access = deriveAccessProfile(
+            state.rawUser,
+            state.rawAccount,
+            state.context,
+            permissionHint
+          );
+          updateHeader();
+          configureUiForAccess();
+        }
+      }
+
+      state.syncDiagnostics = mergeObjects(state.syncDiagnostics, result.diagnostics || {});
+      return Array.isArray(result.invoices) ? result.invoices : [];
+    } catch (error) {
+      appendLog(
+        "SOURCE_FETCH_FAILED",
+        "Server action invoice sync failed; falling back to SDK-only discovery.",
+        error
+      );
+      return [];
+    }
+  }
+
+  function unwrapServerActionResponse(payload) {
+    let current = payload;
+    for (let i = 0; i < 6; i += 1) {
+      if (!current) {
+        return null;
+      }
+      if (Array.isArray(current)) {
+        return { ok: true, invoices: current };
+      }
+      if (typeof current !== "object") {
+        return null;
+      }
+      if (
+        current.ok !== undefined ||
+        current.error ||
+        current.invoices ||
+        current.sourceProjects ||
+        current.teamMembers
+      ) {
+        return current;
+      }
+      current =
+        current.data ||
+        current.response ||
+        current.result ||
+        current.payload ||
+        current.body ||
+        null;
+    }
+    return null;
   }
 
   async function fetchInvoicesFromSourceProjects() {

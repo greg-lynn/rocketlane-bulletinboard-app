@@ -26,6 +26,9 @@ fi
 if [[ -d scripts ]]; then
   cp -R scripts "${STAGING_DIR}/scripts"
 fi
+if [[ -d server-actions ]]; then
+  cp -R server-actions "${STAGING_DIR}/server-actions"
+fi
 
 (
   cd "${STAGING_DIR}"

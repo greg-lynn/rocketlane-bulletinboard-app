@@ -63,7 +63,7 @@
               <input
                 id="searchInput"
                 type="search"
-                placeholder="Search by invoice title, project, or email..."
+                placeholder="Search by status, invoice #, amount, account, or date..."
               />
             </label>
 
@@ -73,11 +73,12 @@
               <table class="invoice-table" aria-label="Invoices table">
                 <thead>
                   <tr>
-                    <th scope="col">Invoice #</th>
-                    <th scope="col">Invoice name</th>
-                    <th scope="col">PM / Expert Advisor</th>
-                    <th scope="col">Rocketlane account</th>
-                    <th scope="col">Invoice date</th>
+                    <th scope="col">Invoice status</th>
+                    <th scope="col">Invoice Number</th>
+                    <th scope="col">Amount</th>
+                    <th scope="col">Account</th>
+                    <th scope="col">Issue Date</th>
+                    <th scope="col">Due Date</th>
                   </tr>
                 </thead>
                 <tbody id="invoiceTableBody"></tbody>

@@ -82,6 +82,17 @@ function normalizeDateValue(value) {
   return text;
 }
 
+function normalizeAmount(value) {
+  if (value == null || value === "") {
+    return 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  const numeric = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -319,6 +330,28 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
         record.createdAt ||
         record.updatedAt
     ) || normalizeDateValue(new Date().toISOString());
+  const issueDate = invoiceDate;
+  const dueDate = normalizeDateValue(
+    record.dueDate ||
+      record.dueOn ||
+      record.paymentDueDate ||
+      record.paymentDueOn ||
+      record.expectedPaymentDate
+  );
+  const invoiceStatus = pickFirst(record.status || record.invoiceStatus || record.state || "Unknown");
+  const amount = normalizeAmount(
+    record.amount ||
+      record.totalAmount ||
+      record.netAmount ||
+      record.grossAmount ||
+      record.subTotal
+  );
+  const currencyCode = pickFirst(
+    record.currencyCode || (record.currency && record.currency.currencyCode)
+  );
+  const currencySymbol = pickFirst(
+    record.currencySymbol || (record.currency && record.currency.currencySymbol)
+  );
   const pdfUrl = pickFirst(
     record.signedUrl ||
       record.downloadUrl ||
@@ -396,6 +429,12 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
       fallbackAccountName ||
       "Rocketlane Account",
     invoiceDate,
+    issueDate,
+    dueDate,
+    invoiceStatus,
+    amount,
+    currencyCode,
+    currencySymbol,
     pdfUrl,
     associatedEmails: dedupeStrings(associatedEmails.concat(projectEmails)),
     associatedUserIds: dedupeStrings(associatedUserIds.concat(projectUserIds)),

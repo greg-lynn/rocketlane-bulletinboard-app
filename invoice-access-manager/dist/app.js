@@ -639,8 +639,21 @@
     }
 
     const direct = normalizeTeamMemberFromAny(state.rawUser);
-    if (direct && direct.permission) {
+    if (direct && hasPermissionSignals(direct)) {
       return direct;
+    }
+
+    const permissionPayloadHint = await fetchPermissionMetadataFromSdk(state.client);
+    if (permissionPayloadHint) {
+      return mergeObjects(
+        {
+          id: pickFirst((state.rawUser && (state.rawUser.id || state.rawUser.userId || state.rawUser._id)) || state.context.userId),
+          email: normalizeEmail(extractPrimaryEmail(state.rawUser) || state.context.userEmail || ""),
+          permission: "",
+          roleLabel: "",
+        },
+        permissionPayloadHint
+      );
     }
 
     try {
@@ -659,6 +672,64 @@
       state.rawUser,
       state.context
     );
+  }
+
+  async function fetchPermissionMetadataFromSdk(client) {
+    if (!client || !client.data) {
+      return null;
+    }
+
+    const parsePayload = (payload) => {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+      const permission = extractPermissionLabel(payload);
+      const roleLabel = extractRoleLabel(payload);
+      if (!permission && !roleLabel) {
+        return null;
+      }
+      return {
+        permission: permission || "",
+        roleLabel: roleLabel || permission || "",
+      };
+    };
+
+    const directCandidates = [
+      "permission",
+      "permissions",
+      "permissionSet",
+      "permission_set",
+      "role",
+      "roles",
+      "currentUserRole",
+      "currentUserPermission",
+    ];
+    for (let i = 0; i < directCandidates.length; i += 1) {
+      const payload = await invokeSdkDataGet(client, directCandidates[i]);
+      const parsed = parsePayload(payload);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const identifiers = (client.data && client.data.dataIdentifiers) || {};
+    const keys = Object.keys(identifiers).filter((key) => {
+      const upper = key.toUpperCase();
+      return (
+        upper.includes("PERMISSION") ||
+        upper.includes("ROLE") ||
+        upper.includes("ACCESS")
+      );
+    });
+    for (let i = 0; i < keys.length; i += 1) {
+      const payload = await invokeSdkDataGet(client, identifiers[keys[i]]);
+      const parsed = parsePayload(payload);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return null;
   }
 
   async function fetchTeamMembersFromSdk(client) {
@@ -909,14 +980,18 @@
           state.rawUser,
           state.context
         );
-        if (permissionHint) {
-          state.permissionHint = permissionHint;
-          state.access = deriveAccessProfile(
+        if (permissionHint && hasPermissionSignals(permissionHint)) {
+          const nextAccess = deriveAccessProfile(
             state.rawUser,
             state.rawAccount,
             state.context,
             permissionHint
           );
+          state.permissionHint = permissionHint;
+          // Never demote an already-detected admin using a weaker hint payload.
+          if (!state.access.isAdmin || nextAccess.isAdmin) {
+            state.access = nextAccess;
+          }
           updateHeader();
           configureUiForAccess();
         }
@@ -1902,6 +1977,7 @@
     const invoiceDate =
       pickFirst(
         node.invoiceDate ||
+          node.dateOfIssue ||
           node.date ||
           node.issuedOn ||
           node.issuedDate ||
@@ -1910,6 +1986,16 @@
           node.createdAt ||
           node.updatedAt
       ) || new Date().toISOString();
+    const dueDate =
+      pickFirst(node.dueDate || node.dueOn || node.paymentDueDate || node.paymentDueOn) || "";
+    const invoiceStatus = pickFirst(node.status || node.invoiceStatus || node.state || "Unknown");
+    const amount = Number(
+      pickFirst(node.amount || node.totalAmount || node.netAmount || node.grossAmount || node.subTotal) || 0
+    );
+    const currencyCode = pickFirst(node.currencyCode || (node.currency && node.currency.currencyCode));
+    const currencySymbol = pickFirst(
+      node.currencySymbol || (node.currency && node.currency.currencySymbol)
+    );
 
     const nodeContacts = extractContacts(node);
     const ownerName =
@@ -1958,10 +2044,17 @@
         pickFirst(
           node.accountName ||
             node.companyName ||
+            (node.company && (node.company.companyName || node.company.name)) ||
             (node.account && node.account.name) ||
             (node.customer && node.customer.name)
         ) || project.accountName || state.context.accountName || "Rocketlane Account",
       invoiceDate,
+      issueDate: invoiceDate,
+      dueDate,
+      invoiceStatus,
+      amount: Number.isFinite(amount) ? amount : 0,
+      currencyCode,
+      currencySymbol,
       pdfUrl,
       associatedEmails,
       associatedUserIds,
@@ -2063,7 +2156,13 @@
       invoiceName: String(invoice.invoiceName || "Untitled invoice").trim(),
       ownerName: String(invoice.ownerName || "Unassigned").trim(),
       accountName: String(invoice.accountName || "Rocketlane Account").trim(),
-      invoiceDate: String(invoice.invoiceDate || new Date().toISOString()),
+      invoiceDate: String(invoice.invoiceDate || invoice.issueDate || new Date().toISOString()),
+      issueDate: String(invoice.issueDate || invoice.invoiceDate || new Date().toISOString()),
+      dueDate: String(invoice.dueDate || ""),
+      invoiceStatus: String(invoice.invoiceStatus || invoice.status || "Unknown").trim(),
+      amount: Number(invoice.amount || 0),
+      currencyCode: String(invoice.currencyCode || "").trim(),
+      currencySymbol: String(invoice.currencySymbol || "").trim(),
       pdfUrl,
       associatedEmails: dedupeEmails(invoice.associatedEmails || []),
       associatedUserIds: dedupeStrings(invoice.associatedUserIds || []),
@@ -2092,7 +2191,7 @@
       result.push(normalized);
     });
     return result.sort(
-      (a, b) => timestampValue(b.invoiceDate) - timestampValue(a.invoiceDate)
+      (a, b) => timestampValue(b.issueDate || b.invoiceDate) - timestampValue(a.issueDate || a.invoiceDate)
     );
   }
 
@@ -2302,23 +2401,27 @@
       }
       numberCell.appendChild(numberButton);
 
-      const nameCell = document.createElement("td");
-      nameCell.textContent = invoice.invoiceName;
+      const statusCell = document.createElement("td");
+      statusCell.textContent = formatStatus(invoice.invoiceStatus);
 
-      const ownerCell = document.createElement("td");
-      ownerCell.textContent = invoice.ownerName;
+      const amountCell = document.createElement("td");
+      amountCell.textContent = formatAmount(invoice.amount, invoice.currencyCode, invoice.currencySymbol);
 
       const accountCell = document.createElement("td");
       accountCell.textContent = invoice.accountName;
 
-      const dateCell = document.createElement("td");
-      dateCell.textContent = formatDate(invoice.invoiceDate);
+      const issueDateCell = document.createElement("td");
+      issueDateCell.textContent = formatDate(invoice.issueDate || invoice.invoiceDate);
 
+      const dueDateCell = document.createElement("td");
+      dueDateCell.textContent = formatDate(invoice.dueDate);
+
+      row.appendChild(statusCell);
       row.appendChild(numberCell);
-      row.appendChild(nameCell);
-      row.appendChild(ownerCell);
+      row.appendChild(amountCell);
       row.appendChild(accountCell);
-      row.appendChild(dateCell);
+      row.appendChild(issueDateCell);
+      row.appendChild(dueDateCell);
       refs.invoiceTableBody.appendChild(row);
     });
   }
@@ -2332,13 +2435,13 @@
     }
 
     refs.selectedInvoiceSummary.textContent =
+      formatStatus(invoice.invoiceStatus) +
+      " · " +
       invoice.invoiceNumber +
       " · " +
-      invoice.invoiceName +
+      formatAmount(invoice.amount, invoice.currencyCode, invoice.currencySymbol) +
       " · " +
-      invoice.ownerName +
-      " · " +
-      formatDate(invoice.invoiceDate) +
+      formatDate(invoice.issueDate || invoice.invoiceDate) +
       (invoice.pdfUrl ? "" : " · PDF preview unavailable");
   }
 
@@ -2387,6 +2490,8 @@
       const search = state.searchQuery;
       invoices = invoices.filter((invoice) => {
         const haystack = (
+          invoice.invoiceStatus +
+          " " +
           invoice.invoiceNumber +
           " " +
           invoice.invoiceName +
@@ -2395,7 +2500,11 @@
           " " +
           invoice.accountName +
           " " +
-          invoice.invoiceDate +
+          invoice.issueDate +
+          " " +
+          invoice.dueDate +
+          " " +
+          String(invoice.amount || "") +
           " " +
           invoice.sourceProjectName +
           " " +
@@ -2406,9 +2515,18 @@
     }
 
     invoices.sort(
-      (a, b) => timestampValue(b.invoiceDate) - timestampValue(a.invoiceDate)
+      (a, b) => timestampValue(b.issueDate || b.invoiceDate) - timestampValue(a.issueDate || a.invoiceDate)
     );
     return invoices;
+  }
+
+  function hasPermissionSignals(hint) {
+    if (!hint || typeof hint !== "object") {
+      return false;
+    }
+    const permission = String(hint.permission || "").trim();
+    const roleLabel = String(hint.roleLabel || "").trim();
+    return Boolean(permission || roleLabel);
   }
 
   function ensureSelectedInvoice() {
@@ -2563,10 +2681,12 @@
     const email = normalizeEmail(extractPrimaryEmail(rawUser) || context.userEmail || "");
     const permissionLabel =
       (permissionHint && permissionHint.permission) || extractPermissionLabel(rawUser);
-    const permissionRole = normalizePermissionRole(permissionLabel);
+    const roleLabelHint =
+      (permissionHint && permissionHint.roleLabel) || extractRoleLabel(rawUser) || context.userRole;
+    const permissionRole = normalizePermissionRole(permissionLabel || roleLabelHint);
     const inferredRole = inferRole(rawUser, rawAccount, context.userRole);
     const role = permissionRole || inferredRole || "non_admin";
-    const permissionValue = permissionLabel || "";
+    const permissionValue = permissionLabel || roleLabelHint || "";
     const isAdmin = role === "admin";
     const roleLabel = resolveRoleLabel(role, { permission: permissionValue });
 
@@ -2631,6 +2751,9 @@
     ) {
       return "admin";
     }
+    if (/(^|\b)(account|workspace|company)\s*owner(\b|$)/.test(haystack)) {
+      return "admin";
+    }
     if (/expert[\s_-]*advisor/.test(haystack)) {
       return "expert_advisor";
     }
@@ -2651,6 +2774,7 @@
     if (
       text.includes("account admin") ||
       text.includes("workspace admin") ||
+      text.includes("owner") ||
       text === "admin"
     ) {
       return "admin";
@@ -2722,7 +2846,10 @@
       text.includes("account admin") ||
       text.includes("workspace admin") ||
       text.includes("account administrator") ||
-      text.includes("workspace administrator")
+      text.includes("workspace administrator") ||
+      text.includes("account owner") ||
+      text.includes("workspace owner") ||
+      text.includes("company owner")
     ) {
       return "admin";
     }
@@ -2830,6 +2957,9 @@
   }
 
   function formatDate(value) {
+    if (!value) {
+      return "Unknown";
+    }
     const timestamp = new Date(value).getTime();
     if (Number.isNaN(timestamp)) {
       return "Unknown";
@@ -2839,6 +2969,39 @@
       month: "short",
       day: "numeric",
     });
+  }
+
+  function formatStatus(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "Unknown";
+    }
+    return raw
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+
+  function formatAmount(amount, currencyCode, currencySymbol) {
+    const numeric = Number(amount || 0);
+    const code = String(currencyCode || "").trim().toUpperCase();
+    if (!Number.isFinite(numeric)) {
+      return "0.00";
+    }
+    if (code) {
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency: code,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(numeric);
+      } catch (_error) {
+        // Fall back when currency code is invalid.
+      }
+    }
+    const symbol = String(currencySymbol || "").trim();
+    return (symbol || "$") + numeric.toFixed(2);
   }
 
   function formatDateTime(value) {

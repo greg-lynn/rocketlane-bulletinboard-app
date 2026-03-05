@@ -296,6 +296,54 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
   };
 }
 
+function invoiceBelongsToProject(record, project) {
+  if (!record || typeof record !== "object" || !project) {
+    return false;
+  }
+  const targetId = pickFirst(project.id);
+  const targetName = normalizeProjectName(project.name);
+  const candidates = [];
+
+  if (Array.isArray(record.projects)) {
+    candidates.push(...record.projects);
+  }
+  if (record.project && typeof record.project === "object") {
+    candidates.push(record.project);
+  }
+  if (record.projects && typeof record.projects === "object" && !Array.isArray(record.projects)) {
+    candidates.push(record.projects);
+  }
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const item = candidates[i] || {};
+    const projectId = pickFirst(
+      item.projectId || item.id || item._id || item.projectID || item.value
+    );
+    const projectName = normalizeProjectName(
+      pickFirst(item.projectName || item.name || item.projectTitle || item.label)
+    );
+    if (targetId && projectId && targetId === projectId) {
+      return true;
+    }
+    if (targetName && projectName && projectName.includes(targetName)) {
+      return true;
+    }
+  }
+
+  const directProjectId = pickFirst(record.projectId || record.projectID);
+  if (targetId && directProjectId && targetId === directProjectId) {
+    return true;
+  }
+  const directProjectName = normalizeProjectName(
+    pickFirst(record.projectName || record.projectTitle)
+  );
+  if (targetName && directProjectName && directProjectName.includes(targetName)) {
+    return true;
+  }
+
+  return false;
+}
+
 function normalizeMember(record) {
   if (!record || typeof record !== "object") {
     return null;
@@ -420,31 +468,22 @@ module.exports = {
         continue;
       }
 
+      const allInvoicesResult = await requestCollection(
+        baseUrl,
+        headers,
+        ["/api/1.0/invoices"],
+        ["invoices", "data", "content", "results", "items"]
+      );
+      diagnostics.invoiceErrors.push(...allInvoicesResult.errors);
+      const globalInvoices = allInvoicesResult.rows;
+
       const collectedInvoices = [];
       for (let i = 0; i < allProjects.length; i += 1) {
         const project = allProjects[i];
-        const paths = [];
-        if (project.id) {
-          paths.push(
-            `/api/1.0/projects/${encodeURIComponent(project.id)}/invoices?size=500`,
-            `/api/1.0/projects/${encodeURIComponent(project.id)}/documents?size=500`,
-            `/api/1.0/projects/${encodeURIComponent(project.id)}/files?size=500`,
-            `/api/1.0/invoices?projectId=${encodeURIComponent(project.id)}&size=500`,
-            `/api/1.0/documents?projectId=${encodeURIComponent(project.id)}&size=500`,
-            `/api/1.0/files?projectId=${encodeURIComponent(project.id)}&size=500`
-          );
-        } else {
-          paths.push("/api/1.0/invoices?size=500", "/api/1.0/documents?size=500");
-        }
-
-        const invoiceResult = await requestCollection(
-          baseUrl,
-          headers,
-          paths,
-          ["invoices", "documents", "files", "tasks", "data", "content", "results", "items"]
+        const scopedInvoices = globalInvoices.filter((row) =>
+          invoiceBelongsToProject(row, project)
         );
-        diagnostics.invoiceErrors.push(...invoiceResult.errors);
-        invoiceResult.rows.forEach((row) => {
+        scopedInvoices.forEach((row) => {
           const normalized = normalizeInvoiceRecord(
             row,
             project,
@@ -454,6 +493,26 @@ module.exports = {
             collectedInvoices.push(normalized);
           }
         });
+
+        if (project.id) {
+          const fileResult = await requestCollection(
+            baseUrl,
+            headers,
+            [`/api/1.0/projects/${encodeURIComponent(project.id)}/files`],
+            ["files", "data", "content", "results", "items"]
+          );
+          diagnostics.invoiceErrors.push(...fileResult.errors);
+          fileResult.rows.forEach((row) => {
+            const normalized = normalizeInvoiceRecord(
+              row,
+              project,
+              request.accountName || iParams.accountName || ""
+            );
+            if (normalized) {
+              collectedInvoices.push(normalized);
+            }
+          });
+        }
       }
 
       const membersResult = await requestCollection(

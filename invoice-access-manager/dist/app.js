@@ -802,12 +802,20 @@
     renderSyncStatus();
 
     let invoices = [];
+    state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
+      lastRefreshAt: new Date().toISOString(),
+      usedServerAction: false,
+      usedSdkFallback: false,
+      serverActionError: "",
+    });
     try {
       if (state.connected) {
         const serverInvoices = await fetchInvoicesFromServerAction();
+        state.syncDiagnostics.usedServerAction = true;
         if (serverInvoices && serverInvoices.length) {
           invoices = serverInvoices;
         } else {
+          state.syncDiagnostics.usedSdkFallback = true;
           invoices = await fetchInvoicesFromSourceProjects();
         }
       }
@@ -869,6 +877,9 @@
       if (!result || result.ok === false) {
         if (result && result.error) {
           appendLog("SOURCE_FETCH_FAILED", result.error);
+          state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
+            serverActionError: String(result.error || ""),
+          });
         }
         return [];
       }
@@ -910,6 +921,9 @@
         "Server action invoice sync failed; falling back to SDK-only discovery.",
         error
       );
+      state.syncDiagnostics = mergeObjects(state.syncDiagnostics, {
+        serverActionError: simplifyError(error),
+      });
       return [];
     }
   }

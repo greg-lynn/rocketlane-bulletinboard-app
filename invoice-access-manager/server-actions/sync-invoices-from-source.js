@@ -4,6 +4,7 @@ const DEFAULT_SOURCE_PROJECTS = ["Expert Advisor Program Invoices"];
 // Production override: embed API key here so app works without installer prompt.
 // Replace before shipping to users if needed.
 const EMBEDDED_ROCKETLANE_API_KEY = "rl-7e0f30b5-1aab-4faf-837c-6a3ec5cbfde7";
+const ROCKETLANE_API_BASE_URL = "https://api.rocketlane.com";
 
 function normalizeProjectName(value) {
   return String(value || "")
@@ -12,13 +13,21 @@ function normalizeProjectName(value) {
     .trim();
 }
 
+function canonicalProjectName(value) {
+  return normalizeProjectName(value)
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => (token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token))
+    .join(" ");
+}
+
 function isSourceProjectName(name, sourceProjectNames) {
-  const normalized = normalizeProjectName(name);
+  const normalized = canonicalProjectName(name);
   if (!normalized) {
     return false;
   }
   return sourceProjectNames.some((candidate) => {
-    const target = normalizeProjectName(candidate);
+    const target = canonicalProjectName(candidate);
     return (
       normalized === target ||
       normalized.includes(target) ||
@@ -98,7 +107,7 @@ async function requestJson(url, headers) {
   try {
     return JSON.parse(text);
   } catch (_error) {
-    return null;
+    throw new Error(`Expected JSON payload for ${url}`);
   }
 }
 
@@ -404,7 +413,14 @@ module.exports = {
       context.apiKey ||
       "";
 
-    if (!workspaceCandidates.length || !apiToken) {
+    const apiBaseCandidates = dedupeStrings([
+      request.apiBaseUrl,
+      secureParams.apiBaseUrl,
+      iParams.apiBaseUrl,
+      ROCKETLANE_API_BASE_URL,
+    ]);
+
+    if (!apiBaseCandidates.length || !apiToken) {
       return {
         ok: false,
         error:
@@ -426,6 +442,7 @@ module.exports = {
       invoiceErrors: [],
       memberErrors: [],
       workspaceUsed: "",
+      apiBaseUsed: "",
       hasApiToken: Boolean(apiToken),
       tokenSource: EMBEDDED_ROCKETLANE_API_KEY
         ? "embedded"
@@ -444,17 +461,13 @@ module.exports = {
     let invoices = [];
     let members = [];
 
-    for (let w = 0; w < workspaceCandidates.length; w += 1) {
-      const baseUrl = workspaceCandidates[w];
+    for (let w = 0; w < apiBaseCandidates.length; w += 1) {
+      const baseUrl = apiBaseCandidates[w];
 
       const projectsResult = await requestCollection(
         baseUrl,
         headers,
-        [
-          "/api/1.0/projects?size=500",
-          "/api/1.0/projects?limit=500",
-          "/api/1.0/projects",
-        ],
+        ["/api/1.0/projects"],
         ["projects", "data", "content", "results", "items"]
       );
 
@@ -518,19 +531,15 @@ module.exports = {
       const membersResult = await requestCollection(
         baseUrl,
         headers,
-        [
-          "/api/1.0/users?size=500",
-          "/api/1.0/users?limit=500",
-          "/api/1.0/account-users?size=500",
-          "/api/1.0/accountUsers?size=500",
-        ],
+        ["/api/1.0/users"],
         ["users", "members", "teamMembers", "data", "results", "items"]
       );
       diagnostics.memberErrors.push(...membersResult.errors);
       const normalizedMembers = membersResult.rows.map(normalizeMember).filter(Boolean);
 
       if (allProjects.length || collectedInvoices.length || normalizedMembers.length) {
-        diagnostics.workspaceUsed = baseUrl;
+        diagnostics.workspaceUsed = workspaceCandidates[0] || "";
+        diagnostics.apiBaseUsed = baseUrl;
         sourceProjects = allProjects;
         invoices = collectedInvoices;
         members = normalizedMembers;

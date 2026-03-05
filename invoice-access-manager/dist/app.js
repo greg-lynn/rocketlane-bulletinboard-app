@@ -11,6 +11,7 @@
 
   const SOURCE_PROJECT_NAMES = [
     "expert advisor program invoices",
+    "expert advisors program invoices",
   ];
 
   const SAMPLE_PDF_DATA_URL =
@@ -1373,12 +1374,12 @@
   }
 
   function isSourceProjectName(name) {
-    const normalized = normalizeProjectName(name);
+    const normalized = canonicalProjectName(name);
     if (!normalized) {
       return false;
     }
     return SOURCE_PROJECT_NAMES.some((candidate) => {
-      const target = normalizeProjectName(candidate);
+      const target = canonicalProjectName(candidate);
       return (
         normalized === target ||
         normalized.includes(target) ||
@@ -1392,6 +1393,14 @@
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
+  }
+
+  function canonicalProjectName(value) {
+    return normalizeProjectName(value)
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((token) => (token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token))
+      .join(" ");
   }
 
   function detectSourceProjectNameInValue(value) {

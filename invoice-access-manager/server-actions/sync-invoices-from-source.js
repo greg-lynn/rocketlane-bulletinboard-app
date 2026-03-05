@@ -93,8 +93,41 @@ function normalizeAmount(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function invoiceMatchesQuery(invoice, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+  const haystack = (
+    String(invoice.invoiceStatus || "") +
+    " " +
+    String(invoice.invoiceNumber || "") +
+    " " +
+    String(invoice.invoiceName || "") +
+    " " +
+    String(invoice.ownerName || "") +
+    " " +
+    String(invoice.accountName || "") +
+    " " +
+    String(invoice.issueDate || invoice.invoiceDate || "") +
+    " " +
+    String(invoice.dueDate || "") +
+    " " +
+    String(invoice.amount || "") +
+    " " +
+    String(invoice.sourceProjectName || "") +
+    " " +
+    (Array.isArray(invoice.associatedEmails) ? invoice.associatedEmails.join(" ") : "")
+  ).toLowerCase();
+  return haystack.includes(normalizedQuery);
+}
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function mergeObjects(a, b) {
+  return Object.assign({}, a || {}, b || {});
 }
 
 function ensureAbsoluteUrl(baseUrl, path) {
@@ -406,6 +439,7 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
           record.invoiceNumber
       ) || `${project.id || project.name}-${invoiceNumber || invoiceName}`,
     invoiceNumber: invoiceNumber || `INV-${Math.random().toString(16).slice(2, 8).toUpperCase()}`,
+    invoiceId: pickFirst(record.invoiceId || record.id || record._id),
     invoiceName,
     ownerName: pickFirst(
       record.projectManagerName ||
@@ -439,6 +473,52 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
     associatedEmails: dedupeStrings(associatedEmails.concat(projectEmails)),
     associatedUserIds: dedupeStrings(associatedUserIds.concat(projectUserIds)),
     sourceProjectName: project.name,
+  };
+}
+
+function normalizeInvoicePreview(invoiceRecord, lineRecords, paymentRecords) {
+  const invoiceNumber = pickFirst(invoiceRecord && invoiceRecord.invoiceNumber);
+  return {
+    invoiceId: pickFirst(invoiceRecord && (invoiceRecord.invoiceId || invoiceRecord.id || invoiceRecord._id)),
+    invoiceNumber,
+    status: pickFirst(invoiceRecord && (invoiceRecord.status || invoiceRecord.invoiceStatus)),
+    amount: normalizeAmount(invoiceRecord && (invoiceRecord.amount || invoiceRecord.totalAmount || invoiceRecord.subTotal)),
+    currencyCode: pickFirst(
+      invoiceRecord &&
+        (invoiceRecord.currencyCode ||
+          (invoiceRecord.currency && invoiceRecord.currency.currencyCode))
+    ),
+    currencySymbol: pickFirst(
+      invoiceRecord &&
+        (invoiceRecord.currencySymbol ||
+          (invoiceRecord.currency && invoiceRecord.currency.currencySymbol))
+    ),
+    issueDate: normalizeDateValue(invoiceRecord && (invoiceRecord.dateOfIssue || invoiceRecord.invoiceDate || invoiceRecord.createdAt)),
+    dueDate: normalizeDateValue(invoiceRecord && invoiceRecord.dueDate),
+    accountName: pickFirst(
+      invoiceRecord &&
+        (invoiceRecord.accountName ||
+          invoiceRecord.companyName ||
+          (invoiceRecord.company && (invoiceRecord.company.companyName || invoiceRecord.company.name)))
+    ),
+    lineItems: Array.isArray(lineRecords)
+      ? lineRecords.map((line) => ({
+          id: pickFirst(line && (line.invoiceLineItemId || line.id || line._id)),
+          description: pickFirst(line && line.description),
+          quantity: normalizeAmount(line && line.quantity),
+          unitPrice: normalizeAmount(line && line.unitPrice),
+          amount: normalizeAmount(line && line.amount),
+        }))
+      : [],
+    payments: Array.isArray(paymentRecords)
+      ? paymentRecords.map((payment) => ({
+          id: pickFirst(payment && (payment.paymentId || payment.id || payment._id)),
+          recordType: pickFirst(payment && (payment.paymentRecordType || payment.type || payment.status)),
+          paymentDate: normalizeDateValue(payment && (payment.paymentDate || payment.date || payment.createdAt)),
+          amount: normalizeAmount(payment && payment.amount),
+          notes: pickFirst(payment && payment.notes),
+        }))
+      : [],
   };
 }
 
@@ -690,6 +770,7 @@ module.exports = {
       iParams.apiBaseUrl,
       ROCKETLANE_API_BASE_URL,
     ]);
+    const normalizedSearchQuery = String(request.searchQuery || "").trim();
 
     if (!apiBaseCandidates.length || !apiToken) {
       return {
@@ -727,8 +808,54 @@ module.exports = {
         ? "context.apiKey"
         : "none",
       contextUserKeys: context && context.user ? Object.keys(context.user) : [],
+      searchQuery: normalizedSearchQuery,
     };
     const viewer = deriveViewerAccess(request, context);
+
+    if (request.previewInvoiceId) {
+      const previewInvoiceId = encodeURIComponent(String(request.previewInvoiceId));
+      for (let i = 0; i < apiBaseCandidates.length; i += 1) {
+        const baseUrl = apiBaseCandidates[i];
+        try {
+          const invoicePayload = await requestJson(
+            ensureAbsoluteUrl(baseUrl, `/api/1.0/invoices/${previewInvoiceId}`),
+            headers
+          );
+          const linePayload = await requestJson(
+            ensureAbsoluteUrl(baseUrl, `/api/1.0/invoices/${previewInvoiceId}/lines`),
+            headers
+          );
+          const paymentPayload = await requestJson(
+            ensureAbsoluteUrl(baseUrl, `/api/1.0/invoices/${previewInvoiceId}/payments`),
+            headers
+          );
+          const lineItems = extractCollection(linePayload, ["data", "lines", "items", "results"]);
+          const payments = extractCollection(paymentPayload, [
+            "data",
+            "payments",
+            "items",
+            "results",
+          ]);
+          return {
+            ok: true,
+            preview: normalizeInvoicePreview(invoicePayload || {}, lineItems, payments),
+            viewer,
+            diagnostics: mergeObjects(diagnostics, { apiBaseUsed: baseUrl }),
+          };
+        } catch (error) {
+          diagnostics.invoiceErrors.push(
+            String(error && error.message ? error.message : error)
+          );
+        }
+      }
+      return {
+        ok: false,
+        error: "Unable to load invoice preview details.",
+        preview: null,
+        viewer,
+        diagnostics,
+      };
+    }
 
     let sourceProjects = [];
     let invoices = [];
@@ -831,14 +958,22 @@ module.exports = {
       seen.add(key);
       dedupedInvoices.push(invoice);
     });
+    const searchMatches = normalizedSearchQuery
+      ? dedupedInvoices.filter((invoice) => invoiceMatchesQuery(invoice, normalizedSearchQuery))
+      : dedupedInvoices;
 
     return {
       ok: true,
       sourceProjects,
-      invoices: dedupedInvoices,
+      invoices: request.searchOnly ? searchMatches : dedupedInvoices,
       teamMembers: dedupeStrings(members.map((m) => `${m.email}|${m.id}`))
         .map((key) => members.find((m) => `${m.email}|${m.id}` === key))
         .filter(Boolean),
+      search: {
+        query: normalizedSearchQuery,
+        totalInvoices: dedupedInvoices.length,
+        matchedInvoices: searchMatches.length,
+      },
       viewer,
       diagnostics,
     };

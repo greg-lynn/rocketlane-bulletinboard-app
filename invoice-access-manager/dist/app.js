@@ -55,8 +55,13 @@
     permissionHint: null,
     selectedInvoiceId: null,
     searchQuery: "",
+    searchInsight: "",
+    searchServerCheckedQuery: "",
+    searchServerMatchedCount: null,
+    searchVerifyTimer: 0,
     activeTab: "invoices",
     syncStatus: "Initializing...",
+    invoicePreviewCache: {},
     access: {
       role: "non_admin",
       roleLabel: "Restricted",
@@ -66,7 +71,7 @@
     },
   };
 
-  window.__invoiceAccessBuild = "role-fix-20260304-prod";
+  window.__invoiceAccessBuild = "search-preview-20260305";
   window.__invoiceAccessDebug = {
     reason: "booting",
     connected: false,
@@ -134,9 +139,12 @@
     refs.syncStatus = document.getElementById("syncStatus");
     refs.searchInput = document.getElementById("searchInput");
     refs.visibilitySummary = document.getElementById("visibilitySummary");
+    refs.searchInsight = document.getElementById("searchInsight");
     refs.invoiceStats = document.getElementById("invoiceStats");
     refs.invoiceTableBody = document.getElementById("invoiceTableBody");
     refs.invoiceEmptyState = document.getElementById("invoiceEmptyState");
+    refs.invoiceEmptyTitle = refs.invoiceEmptyState.querySelector("h3");
+    refs.invoiceEmptyBody = refs.invoiceEmptyState.querySelector("p");
     refs.selectedInvoiceSummary = document.getElementById("selectedInvoiceSummary");
     refs.sourceProjectsText = document.getElementById("sourceProjectsText");
     refs.logsList = document.getElementById("logsList");
@@ -147,6 +155,7 @@
     refs.pdfModal = document.getElementById("pdfModal");
     refs.modalTitle = document.getElementById("modalTitle");
     refs.modalPdfFrame = document.getElementById("modalPdfFrame");
+    refs.modalInvoicePreview = document.getElementById("modalInvoicePreview");
     refs.closeModalButton = document.getElementById("closeModalButton");
   }
 
@@ -155,10 +164,14 @@
     refs.tabLogsButton.addEventListener("click", () => setActiveTab("logs"));
     refs.searchInput.addEventListener("input", (event) => {
       state.searchQuery = String(event.target.value || "").trim().toLowerCase();
+      state.searchServerCheckedQuery = "";
+      state.searchServerMatchedCount = null;
       ensureSelectedInvoice();
       renderInvoiceTable();
       renderInvoiceStats();
       renderSelectedSummary();
+      renderSearchInsight();
+      scheduleSearchVerification();
     });
     refs.clearLogsButton.addEventListener("click", onClearLogs);
     refs.closeModalButton.addEventListener("click", closePdfModal);
@@ -2199,6 +2212,7 @@
 
     return {
       id: String(invoice.id || createId()),
+      invoiceId: String(invoice.invoiceId || invoice.id || "").trim(),
       invoiceNumber: String(invoice.invoiceNumber || "Unknown").trim(),
       invoiceName: String(invoice.invoiceName || "Untitled invoice").trim(),
       ownerName: String(invoice.ownerName || "Unassigned").trim(),
@@ -2371,6 +2385,7 @@
   function renderAll() {
     renderSyncStatus();
     renderVisibilitySummary();
+    renderSearchInsight();
     renderInvoiceStats();
     renderInvoiceTable();
     renderSelectedSummary();
@@ -2410,6 +2425,25 @@
     refs.invoiceTableBody.innerHTML = "";
 
     if (!visible.length) {
+      if (state.searchQuery) {
+        if (refs.invoiceEmptyTitle) {
+          refs.invoiceEmptyTitle.textContent = "No invoices match this search";
+        }
+        if (refs.invoiceEmptyBody) {
+          refs.invoiceEmptyBody.textContent =
+            'No invoices were found for "' +
+            state.searchQuery +
+            '" in the source projects. Try invoice number, status, amount, or account.';
+        }
+      } else {
+        if (refs.invoiceEmptyTitle) {
+          refs.invoiceEmptyTitle.textContent = "No invoices found";
+        }
+        if (refs.invoiceEmptyBody) {
+          refs.invoiceEmptyBody.textContent =
+            "No invoices were discovered in the source projects.";
+        }
+      }
       refs.invoiceEmptyState.classList.remove("hidden");
       return;
     }
@@ -2433,19 +2467,13 @@
       numberButton.type = "button";
       numberButton.className = "invoice-link";
       numberButton.textContent = invoice.invoiceNumber;
-      if (invoice.pdfUrl) {
-        numberButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          state.selectedInvoiceId = invoice.id;
-          renderInvoiceTable();
-          renderSelectedSummary();
-          openPdfModal(invoice);
-        });
-      } else {
-        numberButton.disabled = true;
-        numberButton.classList.add("disabled");
-        numberButton.title = "No PDF preview available for this invoice.";
-      }
+      numberButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.selectedInvoiceId = invoice.id;
+        renderInvoiceTable();
+        renderSelectedSummary();
+        openPdfModal(invoice);
+      });
       numberCell.appendChild(numberButton);
 
       const statusCell = document.createElement("td");
@@ -2477,7 +2505,7 @@
     const invoice = getSelectedVisibleInvoice();
     if (!invoice) {
       refs.selectedInvoiceSummary.textContent =
-        "Click an invoice number to preview its PDF.";
+        "Click an invoice number to preview invoice details.";
       return;
     }
 
@@ -2489,7 +2517,7 @@
       formatAmount(invoice.amount, invoice.currencyCode, invoice.currencySymbol) +
       " · " +
       formatDate(invoice.issueDate || invoice.invoiceDate) +
-      (invoice.pdfUrl ? "" : " · PDF preview unavailable");
+      (invoice.pdfUrl ? "" : " · showing invoice details preview");
   }
 
   function renderSourceProjects() {
@@ -2501,20 +2529,330 @@
   }
 
   function openPdfModal(invoice) {
-    if (!invoice || !invoice.pdfUrl) {
-      appendLog("PDF_PREVIEW_FAILED", "Attempted to preview an invoice without a PDF URL.");
+    if (!invoice) {
       return;
     }
     refs.modalTitle.textContent = invoice.invoiceNumber + " · " + invoice.invoiceName;
-    refs.modalPdfFrame.setAttribute("src", invoice.pdfUrl);
     refs.pdfModal.classList.remove("hidden");
     refs.pdfModal.setAttribute("aria-hidden", "false");
+    if (invoice.pdfUrl) {
+      refs.modalInvoicePreview.classList.add("hidden");
+      refs.modalInvoicePreview.innerHTML = "";
+      refs.modalPdfFrame.classList.remove("hidden");
+      refs.modalPdfFrame.setAttribute("src", invoice.pdfUrl);
+      return;
+    }
+    refs.modalPdfFrame.classList.add("hidden");
+    refs.modalPdfFrame.removeAttribute("src");
+    refs.modalInvoicePreview.classList.remove("hidden");
+    renderInvoicePreviewContent(invoice, null, true);
+    loadInvoicePreview(invoice);
   }
 
   function closePdfModal() {
     refs.pdfModal.classList.add("hidden");
     refs.pdfModal.setAttribute("aria-hidden", "true");
     refs.modalPdfFrame.removeAttribute("src");
+    refs.modalPdfFrame.classList.remove("hidden");
+    refs.modalInvoicePreview.classList.add("hidden");
+    refs.modalInvoicePreview.innerHTML = "";
+  }
+
+  function renderSearchInsight() {
+    if (!refs.searchInsight) {
+      return;
+    }
+    const visibleCount = getVisibleInvoices().length;
+    const totalCount = state.invoices.length;
+    if (!state.searchQuery) {
+      refs.searchInsight.textContent =
+        "Search runs across invoices from source projects and updates instantly as you type.";
+      return;
+    }
+    const queryText = '"' + state.searchQuery + '"';
+    if (visibleCount > 0) {
+      refs.searchInsight.textContent =
+        "Showing " +
+        visibleCount +
+        " matching invoice(s) for " +
+        queryText +
+        " from " +
+        totalCount +
+        " loaded invoice(s).";
+      return;
+    }
+    if (state.searchServerCheckedQuery === state.searchQuery) {
+      refs.searchInsight.textContent =
+        "No matches for " +
+        queryText +
+        " in source projects. Server verified " +
+        (state.searchServerMatchedCount == null ? 0 : state.searchServerMatchedCount) +
+        " match(es).";
+      return;
+    }
+    refs.searchInsight.textContent =
+      "No local matches for " +
+      queryText +
+      ". Verifying against source projects...";
+  }
+
+  function scheduleSearchVerification() {
+    if (state.searchVerifyTimer) {
+      window.clearTimeout(state.searchVerifyTimer);
+      state.searchVerifyTimer = 0;
+    }
+    if (!state.connected || !state.searchQuery || state.searchQuery.length < 2) {
+      return;
+    }
+    const queryAtSchedule = state.searchQuery;
+    state.searchVerifyTimer = window.setTimeout(() => {
+      verifySearchAgainstSourceProjects(queryAtSchedule).catch((_error) => {
+        // Search verification is best-effort and should not block UI interactions.
+      });
+    }, 420);
+  }
+
+  async function verifySearchAgainstSourceProjects(query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    if (!normalizedQuery || normalizedQuery !== state.searchQuery) {
+      return;
+    }
+    const result = await fetchSearchMatchesFromServerAction(normalizedQuery);
+    if (!result || normalizedQuery !== state.searchQuery) {
+      return;
+    }
+    state.searchServerCheckedQuery = normalizedQuery;
+    state.searchServerMatchedCount = Number(result.matchedInvoices || 0);
+    renderSearchInsight();
+  }
+
+  async function fetchSearchMatchesFromServerAction(searchQuery) {
+    if (
+      !state.client ||
+      !state.client.data ||
+      typeof state.client.data.invoke !== "function"
+    ) {
+      return null;
+    }
+    const workspaceCandidates = [
+      "https://blink.rocketlane.com",
+      "https://innovate-calgary.rocketlane.com",
+    ];
+    const accountDomain = pickFirst(
+      state.rawAccount &&
+        (state.rawAccount.domainName ||
+          state.rawAccount.primaryDomainName ||
+          state.rawAccount.domain)
+    );
+    if (accountDomain) {
+      workspaceCandidates.unshift(
+        "https://" + accountDomain.replace(/^https?:\/\//i, "")
+      );
+    }
+    try {
+      const payload = await state.client.data.invoke("syncInvoicesFromSource", {
+        sourceProjectNames: SOURCE_PROJECT_NAMES.slice(),
+        accountName: state.context.accountName || "",
+        workspaceBaseUrl: workspaceCandidates[0],
+        workspaceCandidates,
+        searchQuery,
+        searchOnly: true,
+      });
+      const result = unwrapServerActionResponse(payload);
+      if (!result || result.ok === false) {
+        return null;
+      }
+      if (result.search && typeof result.search === "object") {
+        return result.search;
+      }
+      const matches = Array.isArray(result.invoices) ? result.invoices.length : 0;
+      return { query: searchQuery, matchedInvoices: matches };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async function loadInvoicePreview(invoice) {
+    const cacheKey = String(invoice.id || invoice.invoiceId || invoice.invoiceNumber || "");
+    if (cacheKey && state.invoicePreviewCache[cacheKey]) {
+      renderInvoicePreviewContent(invoice, state.invoicePreviewCache[cacheKey], false);
+      return;
+    }
+    try {
+      const preview = await fetchInvoicePreviewFromServerAction(invoice);
+      if (cacheKey && preview) {
+        state.invoicePreviewCache[cacheKey] = preview;
+      }
+      renderInvoicePreviewContent(invoice, preview, false);
+    } catch (_error) {
+      renderInvoicePreviewContent(
+        invoice,
+        null,
+        false,
+        "Unable to load invoice preview details right now."
+      );
+    }
+  }
+
+  async function fetchInvoicePreviewFromServerAction(invoice) {
+    if (
+      !state.connected ||
+      !state.client ||
+      !state.client.data ||
+      typeof state.client.data.invoke !== "function"
+    ) {
+      return null;
+    }
+    const previewInvoiceId = pickFirst(
+      invoice.invoiceId || invoice.id || invoice.invoiceNumber
+    );
+    if (!previewInvoiceId) {
+      return null;
+    }
+    const workspaceCandidates = [
+      "https://blink.rocketlane.com",
+      "https://innovate-calgary.rocketlane.com",
+    ];
+    const accountDomain = pickFirst(
+      state.rawAccount &&
+        (state.rawAccount.domainName ||
+          state.rawAccount.primaryDomainName ||
+          state.rawAccount.domain)
+    );
+    if (accountDomain) {
+      workspaceCandidates.unshift(
+        "https://" + accountDomain.replace(/^https?:\/\//i, "")
+      );
+    }
+    const payload = await state.client.data.invoke("syncInvoicesFromSource", {
+      sourceProjectNames: SOURCE_PROJECT_NAMES.slice(),
+      accountName: state.context.accountName || "",
+      workspaceBaseUrl: workspaceCandidates[0],
+      workspaceCandidates,
+      previewInvoiceId,
+    });
+    const result = unwrapServerActionResponse(payload);
+    if (!result || result.ok === false) {
+      return null;
+    }
+    return result.preview || null;
+  }
+
+  function renderInvoicePreviewContent(invoice, preview, isLoading, errorText) {
+    if (!refs.modalInvoicePreview) {
+      return;
+    }
+    if (isLoading) {
+      refs.modalInvoicePreview.innerHTML =
+        '<p class="muted">Loading invoice preview details...</p>';
+      return;
+    }
+    if (errorText) {
+      refs.modalInvoicePreview.innerHTML =
+        '<p class="muted">' + escapeHtml(errorText) + "</p>";
+      return;
+    }
+    const previewData = preview || {};
+    const summaryRows = [
+      ["Status", formatStatus(previewData.status || invoice.invoiceStatus)],
+      ["Invoice #", invoice.invoiceNumber],
+      [
+        "Amount",
+        formatAmount(
+          previewData.amount != null ? previewData.amount : invoice.amount,
+          previewData.currencyCode || invoice.currencyCode,
+          previewData.currencySymbol || invoice.currencySymbol
+        ),
+      ],
+      ["Account", previewData.accountName || invoice.accountName],
+      [
+        "Issue date",
+        formatDate(previewData.issueDate || invoice.issueDate || invoice.invoiceDate),
+      ],
+      ["Due date", formatDate(previewData.dueDate || invoice.dueDate)],
+    ];
+    const lineItems = Array.isArray(previewData.lineItems) ? previewData.lineItems : [];
+    const payments = Array.isArray(previewData.payments) ? previewData.payments : [];
+    const lineRowsHtml = lineItems.length
+      ? lineItems
+          .map(
+            (line) =>
+              "<tr><td>" +
+              escapeHtml(line.description || "Line item") +
+              "</td><td>" +
+              escapeHtml(String(line.quantity || 0)) +
+              "</td><td>" +
+              escapeHtml(
+                formatAmount(
+                  line.unitPrice || 0,
+                  previewData.currencyCode || invoice.currencyCode,
+                  previewData.currencySymbol || invoice.currencySymbol
+                )
+              ) +
+              "</td><td>" +
+              escapeHtml(
+                formatAmount(
+                  line.amount || 0,
+                  previewData.currencyCode || invoice.currencyCode,
+                  previewData.currencySymbol || invoice.currencySymbol
+                )
+              ) +
+              "</td></tr>"
+          )
+          .join("")
+      : '<tr><td colspan="4">No invoice line items returned by API.</td></tr>';
+    const paymentRowsHtml = payments.length
+      ? payments
+          .map(
+            (payment) =>
+              "<tr><td>" +
+              escapeHtml(payment.recordType || "Payment") +
+              "</td><td>" +
+              escapeHtml(formatDate(payment.paymentDate)) +
+              "</td><td>" +
+              escapeHtml(
+                formatAmount(
+                  payment.amount || 0,
+                  previewData.currencyCode || invoice.currencyCode,
+                  previewData.currencySymbol || invoice.currencySymbol
+                )
+              ) +
+              "</td><td>" +
+              escapeHtml(payment.notes || "-") +
+              "</td></tr>"
+          )
+          .join("")
+      : '<tr><td colspan="4">No payment records returned by API.</td></tr>';
+    refs.modalInvoicePreview.innerHTML =
+      '<div class="modal-preview-summary">' +
+      summaryRows
+        .map(
+          (row) =>
+            '<div class="modal-preview-row"><strong>' +
+            escapeHtml(row[0]) +
+            ":</strong> " +
+            escapeHtml(row[1] || "Unknown") +
+            "</div>"
+        )
+        .join("") +
+      "</div>" +
+      '<h4 class="modal-preview-section-title">Invoice line items</h4>' +
+      '<table class="modal-preview-table"><thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead><tbody>' +
+      lineRowsHtml +
+      "</tbody></table>" +
+      '<h4 class="modal-preview-section-title">Payments</h4>' +
+      '<table class="modal-preview-table"><thead><tr><th>Type</th><th>Date</th><th>Amount</th><th>Notes</th></tr></thead><tbody>' +
+      paymentRowsHtml +
+      "</tbody></table>";
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function getVisibleInvoices() {

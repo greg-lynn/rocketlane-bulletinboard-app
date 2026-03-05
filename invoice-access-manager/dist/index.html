@@ -66,6 +66,9 @@
                 placeholder="Search by status, invoice #, amount, account, or date..."
               />
             </label>
+            <p id="searchInsight" class="muted">
+              Search runs across invoices in source projects and updates as you type.
+            </p>
 
             <p id="visibilitySummary" class="visibility-summary"></p>
 
@@ -138,6 +141,7 @@
           <button id="closeModalButton" class="btn btn-subtle" type="button">Close</button>
         </header>
         <iframe id="modalPdfFrame" class="modal-pdf-frame" title="Invoice PDF preview"></iframe>
+        <div id="modalInvoicePreview" class="modal-invoice-preview hidden"></div>
       </div>
     </div>
 

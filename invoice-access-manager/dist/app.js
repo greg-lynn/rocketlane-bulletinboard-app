@@ -822,6 +822,7 @@
           raw.emailId ||
           raw.userEmail ||
           raw.workEmail ||
+          (raw.user && (raw.user.email || raw.user.emailId)) ||
           (raw.user && raw.user.email) ||
           (raw.profile && raw.profile.email)
       )
@@ -3145,6 +3146,8 @@
           value.displayName ||
           value.title ||
           value.value ||
+        value.permissionName ||
+        value.roleName ||
           value.role ||
           value.permission
       ) || ""
@@ -3164,10 +3167,14 @@
       : "";
     return readTextValue(
       source.permission ||
+        (source.permission && source.permission.permissionName) ||
+        (source.permission && source.permission.name) ||
         source.permissionName ||
         source.permissionSet ||
+        (source.permissionSet && source.permissionSet.name) ||
         source.permissionSetObj ||
         source.accountPermission ||
+        (source.accountPermission && source.accountPermission.permissionName) ||
         source.access ||
         source.permissions ||
         permissionsList
@@ -3181,6 +3188,8 @@
     const source = unwrapTopLevelObject(raw);
     return readTextValue(
       source.role ||
+        (source.role && source.role.roleName) ||
+        (source.role && source.role.name) ||
         source.userRole ||
         source.designation ||
         source.title ||

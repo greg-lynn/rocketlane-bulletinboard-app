@@ -511,12 +511,21 @@ function normalizeMember(record) {
     id,
     email,
     permission: pickFirst(
-      record.permission ||
+      (record.permission && record.permission.permissionName) ||
+        (record.permission && record.permission.name) ||
+        record.permission ||
         record.permissionSet ||
+        (record.permissionSet && record.permissionSet.name) ||
         record.accountPermission ||
         (record.permissionSetObj && record.permissionSetObj.name)
     ),
-    roleLabel: pickFirst(record.role || record.userRole || record.designation || record.title),
+    roleLabel: pickFirst(
+      (record.role && (record.role.roleName || record.role.name)) ||
+        record.role ||
+        record.userRole ||
+        record.designation ||
+        record.title
+    ),
   };
 }
 
@@ -795,7 +804,7 @@ module.exports = {
       const membersResult = await requestCollection(
         baseUrl,
         headers,
-        ["/api/1.0/users"],
+        ["/api/1.0/users?includeFields=permission,role,company", "/api/1.0/users?includeFields=permission", "/api/1.0/users"],
         ["users", "members", "teamMembers", "data", "results", "items"]
       );
       diagnostics.memberErrors.push(...membersResult.errors);

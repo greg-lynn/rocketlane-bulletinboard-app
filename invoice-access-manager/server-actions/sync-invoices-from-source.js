@@ -46,6 +46,42 @@ function pickFirst(value) {
   return "";
 }
 
+function fullName(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const first = pickFirst(value.firstName || value.first_name);
+  const last = pickFirst(value.lastName || value.last_name);
+  const combined = `${first} ${last}`.trim();
+  return combined || pickFirst(value.name || value.displayName || value.userName);
+}
+
+function normalizeDateValue(value) {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return "";
+  }
+  if (/^\d{10,13}$/.test(text)) {
+    const asNumber = Number(text);
+    const date = new Date(asNumber);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+  }
+  const date = new Date(text);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString();
+  }
+  return text;
+}
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -165,10 +201,51 @@ function normalizeProject(record) {
   const accountName = pickFirst(
     record.accountName ||
       record.companyName ||
+      (record.company && record.company.companyName) ||
+      (record.company && record.company.name) ||
       (record.account && record.account.name) ||
-      (record.customer && record.customer.name)
+      (record.customer && record.customer.name) ||
+      (record.customer && record.customer.companyName)
   );
-  return { id, name, accountName };
+  const owner = record.owner && typeof record.owner === "object" ? record.owner : null;
+  const teamMembers = [];
+  if (record.teamMembers && typeof record.teamMembers === "object") {
+    if (Array.isArray(record.teamMembers.members)) {
+      teamMembers.push(...record.teamMembers.members);
+    }
+    if (Array.isArray(record.teamMembers.customers)) {
+      teamMembers.push(...record.teamMembers.customers);
+    }
+  }
+  if (Array.isArray(record.members)) {
+    teamMembers.push(...record.members);
+  }
+  const ownerName = fullName(owner);
+  const ownerEmail = normalizeEmail(
+    pickFirst(owner && (owner.email || owner.emailId || owner.userEmail))
+  );
+  const ownerUserId = pickFirst(owner && (owner.userId || owner.id || owner._id));
+  const memberNames = dedupeStrings(teamMembers.map((member) => fullName(member)));
+  const memberEmails = dedupeStrings(
+    teamMembers.map((member) =>
+      normalizeEmail(
+        pickFirst(member && (member.email || member.emailId || member.userEmail))
+      )
+    )
+  );
+  const memberUserIds = dedupeStrings(
+    teamMembers.map((member) => pickFirst(member && (member.userId || member.id || member._id)))
+  );
+  return {
+    id,
+    name,
+    accountName,
+    ownerName: ownerName || memberNames[0] || "",
+    ownerEmail: ownerEmail || memberEmails[0] || "",
+    ownerUserId: ownerUserId || memberUserIds[0] || "",
+    memberEmails,
+    memberUserIds,
+  };
 }
 
 function extractEmails(value, output, depth) {
@@ -229,17 +306,19 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
         record.fileName ||
         record.title ||
         record.subject
-    ) || "Invoice";
+    ) || (invoiceNumber ? `Invoice ${invoiceNumber}` : "Invoice");
   const invoiceDate =
-    pickFirst(
+    normalizeDateValue(
       record.invoiceDate ||
+        record.dateOfIssue ||
         record.issuedDate ||
         record.issuedOn ||
+        record.date ||
         record.approvedAt ||
         record.submittedAt ||
         record.createdAt ||
         record.updatedAt
-    ) || new Date().toISOString();
+    ) || normalizeDateValue(new Date().toISOString());
   const pdfUrl = pickFirst(
     record.signedUrl ||
       record.downloadUrl ||
@@ -272,6 +351,13 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
     record.user && record.user.userId,
   ]);
 
+  const projectUserIds = dedupeStrings([
+    project && project.ownerUserId,
+  ].concat((project && project.memberUserIds) || []));
+  const projectEmails = dedupeStrings([
+    normalizeEmail(project && project.ownerEmail),
+  ].concat((project && project.memberEmails) || []));
+
   if (!invoiceNumber && !invoiceName) {
     return null;
   }
@@ -294,13 +380,25 @@ function normalizeInvoiceRecord(record, project, fallbackAccountName) {
         record.pmName ||
         record.ownerName ||
         record.assigneeName ||
+        fullName(record.createdBy) ||
+        fullName(record.owner) ||
         (record.owner && record.owner.name)
-    ) || "Unassigned",
-    accountName: project.accountName || fallbackAccountName || "Rocketlane Account",
+    ) || project.ownerName || "Unassigned",
+    accountName:
+      pickFirst(
+        record.accountName ||
+          record.companyName ||
+          (record.company && (record.company.companyName || record.company.name)) ||
+          (record.account && record.account.name) ||
+          (record.customer && (record.customer.companyName || record.customer.name))
+      ) ||
+      project.accountName ||
+      fallbackAccountName ||
+      "Rocketlane Account",
     invoiceDate,
     pdfUrl,
-    associatedEmails,
-    associatedUserIds,
+    associatedEmails: dedupeStrings(associatedEmails.concat(projectEmails)),
+    associatedUserIds: dedupeStrings(associatedUserIds.concat(projectUserIds)),
     sourceProjectName: project.name,
   };
 }

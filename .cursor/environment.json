@@ -1,0 +1,10 @@
+{
+  "name": "Rocketlane Bulletin Board App",
+  "install": "npm ci && npx playwright install --with-deps chromium",
+  "terminals": [
+    {
+      "name": "preview-server",
+      "command": "python3 -m http.server 4173 --bind 127.0.0.1 --directory dist"
+    }
+  ]
+}
